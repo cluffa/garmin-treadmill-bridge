@@ -25,6 +25,7 @@ static uint8_t       s_own_addr_type = BLE_OWN_ADDR_RANDOM;
 static ftms_device_t s_devs[FTMS_MAX_DEVICES];
 static int           s_ndev;
 static ftms_device_t s_pending;   /* device currently being connected */
+static bool          s_scanning;  /* suppress reconnect while scan is pending */
 
 /* ---- NVS persistence of the last device (incl. protocol) ---------------- */
 
@@ -53,6 +54,7 @@ static void on_evt(int connected) {
         ESP_LOGI(TAG, "connected (%s)",
                  s_pending.proto == MACHINE_PROTO_IFIT ? "iFit" : "FTMS");
     } else {
+        if (s_scanning) return;  /* cancelled intentionally; scan will start */
         ESP_LOGI(TAG, "disconnected — reconnecting to last");
         machine_try_last();      /* one re-attempt; its failure falls to scan */
     }
@@ -115,8 +117,10 @@ void machine_set_data_cb(machine_state_cb cb) {
 
 void machine_start_scan(void) {
     s_ndev = 0;
+    s_scanning = true;
     ble_gap_conn_cancel();   /* cancel any in-progress connection attempt */
     ble_gap_disc_cancel();   /* cancel any in-progress scan */
+    s_scanning = false;
     struct ble_gap_disc_params p = { .filter_duplicates = 0, .passive = 0,
         .filter_policy = BLE_HCI_SCAN_FILT_NO_WL };
     int rc = ble_gap_disc(s_own_addr_type, BLE_HS_FOREVER, &p, gap_scan_cb, NULL);
