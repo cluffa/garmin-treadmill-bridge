@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- CP210x (Silicon Labs) -->
+    <usb-device vendor-id="4292" />
+    <!-- CH340/CH341 (WCH) -->
+    <usb-device vendor-id="6790" />
+    <!-- FTDI -->
+    <usb-device vendor-id="1027" />
+    <!-- ESP32 native USB CDC -->
+    <usb-device vendor-id="12346" />
+</resources>
