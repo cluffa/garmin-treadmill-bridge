@@ -43,3 +43,7 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    implementation("com.garmin.connectiq:ciq-companion-app-sdk:2.2.0@aar")
+}
