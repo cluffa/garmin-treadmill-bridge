@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/bridge_service.dart';
+import '../services/garmin_ciq_service.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -22,11 +23,12 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final bridge = context.watch<BridgeService>();
+    final garmin = context.watch<GarminCiqService>();
     return Scaffold(
       appBar: AppBar(title: const Text('FTMS Sync')),
       body: bridge.connectionMode == 'disconnected'
           ? _connectView(bridge)
-          : _mainView(bridge),
+          : _mainView(bridge, garmin),
     );
   }
 
@@ -82,8 +84,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // ── Main screen ──────────────────────────────────────────────────────────
 
-  Widget _mainView(BridgeService bridge) => Column(children: [
+  Widget _mainView(BridgeService bridge, GarminCiqService garmin) => Column(children: [
         _statusBar(bridge),
+        _garminBar(garmin),
         const Divider(height: 1),
         Expanded(child: _treadmillPanel(bridge)),
         const Divider(height: 1),
@@ -112,6 +115,25 @@ class _HomeScreenState extends State<HomeScreen> {
             },
           ),
         ]),
+      );
+
+  Widget _garminBar(GarminCiqService garmin) => ListTile(
+        dense: true,
+        leading: Icon(
+          Icons.watch,
+          color: garmin.deviceConnected ? Colors.blue : Colors.grey,
+          size: 20,
+        ),
+        title: Text(
+          garmin.deviceConnected
+              ? 'Garmin: ${garmin.deviceName ?? "connected"}'
+              : 'Garmin: not paired',
+          style: const TextStyle(fontSize: 14),
+        ),
+        trailing: TextButton(
+          onPressed: garmin.selectDevice,
+          child: const Text('Pair Watch'),
+        ),
       );
 
   Widget _treadmillPanel(BridgeService bridge) {

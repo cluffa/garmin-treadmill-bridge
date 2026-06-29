@@ -13,36 +13,22 @@ void main() {
   );
 }
 
-class FtmsSyncApp extends StatefulWidget {
+class FtmsSyncApp extends StatelessWidget {
   const FtmsSyncApp({super.key});
-  @override
-  State<FtmsSyncApp> createState() => _FtmsSyncAppState();
-}
-
-class _FtmsSyncAppState extends State<FtmsSyncApp> {
-  GarminCiqService? _ciq;
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _ciq ??= GarminCiqService(context.read<BridgeService>());
-  }
-
-  @override
-  void dispose() {
-    _ciq?.dispose();
-    super.dispose();
-  }
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'FTMS Sync',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
-        useMaterial3: true,
+    return ChangeNotifierProxyProvider<BridgeService, GarminCiqService>(
+      create: (ctx) => GarminCiqService(ctx.read<BridgeService>()),
+      update: (_, bridge, prev) => prev ?? GarminCiqService(bridge),
+      child: MaterialApp(
+        title: 'FTMS Sync',
+        theme: ThemeData(
+          colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
+          useMaterial3: true,
+        ),
+        home: const HomeScreen(),
       ),
-      home: const HomeScreen(),
     );
   }
 }

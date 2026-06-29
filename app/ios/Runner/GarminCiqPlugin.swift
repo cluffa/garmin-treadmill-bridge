@@ -1,43 +1,75 @@
 import Flutter
-import Foundation
+import ConnectIQ
 
-/// Wraps the Garmin ConnectIQ iOS SDK.
-///
-/// TODO: Add the ConnectIQ iOS SDK framework:
-///   1. Download from https://developer.garmin.com/connect-iq/sdk/
-///   2. Drag ConnectIQ.framework into ios/Runner/ in Xcode
-///   3. Add to Runner target → General → Frameworks, Libraries, Embedded Content
-///   4. Uncomment the ConnectIQ implementation below
-///
-/// Until then this compiles as a no-op stub so the channel is wired up.
-class GarminCiqPlugin: NSObject {
+// UUID of the CIQ data field app — must match the app-id in your .mc source
+private let kAppUUID = UUID(uuidString: "a3421fee-d6d4-4e69-8bcd-42ac52e81013")!
+private let kURLScheme = "garmin-ftms-sync"
+
+class GarminCiqPlugin: NSObject, IQDeviceEventDelegate, IQAppMessageDelegate {
+    static weak var shared: GarminCiqPlugin?
+
     private let channel: FlutterMethodChannel
+    private var devices: [IQDevice] = []
+    private var apps: [IQApp] = []
 
     static func register(with messenger: FlutterBinaryMessenger) {
-        _ = GarminCiqPlugin(messenger: messenger)
+        let instance = GarminCiqPlugin(messenger: messenger)
+        shared = instance
     }
 
     init(messenger: FlutterBinaryMessenger) {
-        channel = FlutterMethodChannel(
-            name: "com.cluffa.garmin_ftms/ciq",
-            binaryMessenger: messenger)
+        channel = FlutterMethodChannel(name: "com.cluffa.garmin_ftms/ciq",
+                                       binaryMessenger: messenger)
         super.init()
         channel.setMethodCallHandler(handle)
-        // TODO: initConnectIQ()
+        ConnectIQ.sharedInstance().initialize(withUrlScheme: kURLScheme, uiOverrideDelegate: nil)
+    }
+
+    // Called by SceneDelegate when GCM returns to the app via URL scheme
+    func handleOpen(url: URL) {
+        guard let parsed = ConnectIQ.sharedInstance().parseDeviceSelectionResponse(from: url) as? [IQDevice] else { return }
+        ConnectIQ.sharedInstance().unregister(forAllDeviceEvents: self)
+        ConnectIQ.sharedInstance().unregister(forAllAppMessages: self)
+        devices = parsed
+        apps = parsed.map { device in
+            let app = IQApp(uuid: kAppUUID, store: kAppUUID, device: device)!
+            ConnectIQ.sharedInstance().register(forDeviceEvents: device, delegate: self)
+            ConnectIQ.sharedInstance().register(forAppMessages: app, delegate: self)
+            return app
+        }
+        let names = devices.map { ["name": $0.friendlyName as Any, "model": $0.modelName as Any] }
+        channel.invokeMethod("onDevices", arguments: names)
     }
 
     private func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         switch call.method {
+        case "selectDevice":
+            ConnectIQ.sharedInstance().showDeviceSelection()
+            result(nil)
         case "pushState":
-            // TODO: forward state dict to paired CIQ app on the watch
-            // let args = call.arguments as? [String: Any]
-            // connectIQ.sendMessage(args, to: device, through: app, ...)
+            guard let args = call.arguments as? [String: Any], !apps.isEmpty else { result(nil); return }
+            for app in apps {
+                ConnectIQ.sharedInstance().sendMessage(args, to: app,
+                    progress: { _, _ in },
+                    completion: { _ in })
+            }
             result(nil)
         default:
             result(FlutterMethodNotImplemented)
         }
     }
 
-    // Called by the ConnectIQ SDK delegate when the watch sends a command:
-    // channel.invokeMethod("onCommand", arguments: ["type": "speed", "value": 8.5])
+    // MARK: - IQDeviceEventDelegate
+    func deviceStatusChanged(_ device: IQDevice, status: IQDeviceStatus) {
+        channel.invokeMethod("onDeviceStatus", arguments: [
+            "connected": status == .connected,
+            "name": device.friendlyName as Any
+        ])
+    }
+
+    // MARK: - IQAppMessageDelegate — watch → phone commands
+    func receivedMessage(_ message: Any, from app: IQApp) {
+        guard let dict = message as? [String: Any] else { return }
+        channel.invokeMethod("onCommand", arguments: dict)
+    }
 }
