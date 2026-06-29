@@ -115,6 +115,8 @@ void machine_set_data_cb(machine_state_cb cb) {
 
 void machine_start_scan(void) {
     s_ndev = 0;
+    ble_gap_conn_cancel();   /* cancel any in-progress connection attempt */
+    ble_gap_disc_cancel();   /* cancel any in-progress scan */
     struct ble_gap_disc_params p = { .filter_duplicates = 0, .passive = 0,
         .filter_policy = BLE_HCI_SCAN_FILT_NO_WL };
     int rc = ble_gap_disc(s_own_addr_type, BLE_HS_FOREVER, &p, gap_scan_cb, NULL);
