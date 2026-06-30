@@ -167,6 +167,7 @@ class _HomeScreenState extends State<HomeScreen> {
       padding: const EdgeInsets.all(16),
       child: Column(children: [
         _metric('Speed', '${s.speedKmh.toStringAsFixed(1)} km/h'),
+        _metric('Pace', _formatPace(s.speedKmh)),
         _metric('Distance', '${(s.distanceM / 1000).toStringAsFixed(3)} km'),
         _metric('Incline', '${s.inclinePct.toStringAsFixed(1)} %'),
         _metric('Elapsed', _formatElapsed(s.elapsedS)),
@@ -301,5 +302,13 @@ class _HomeScreenState extends State<HomeScreen> {
     return h > 0
         ? '$h:${m.toString().padLeft(2, '0')}:${sec.toString().padLeft(2, '0')}'
         : '${m.toString().padLeft(2, '0')}:${sec.toString().padLeft(2, '0')}';
+  }
+
+  String _formatPace(double speedKmh) {
+    if (speedKmh <= 0.1) return '--:-- /mi';
+    final paceMins = 96.5604 / speedKmh; // 60 * 1.60934
+    final mins = paceMins.truncate();
+    final secs = ((paceMins - mins) * 60).round();
+    return '$mins:${secs.toString().padLeft(2, '0')} /mi';
   }
 }
