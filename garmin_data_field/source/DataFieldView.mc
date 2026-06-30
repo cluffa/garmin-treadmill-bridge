@@ -42,7 +42,7 @@ class DataFieldView extends WatchUi.DataField {
         // Send current workout status (target pace) every 5 seconds
         if (status && (now - mLastSendTime > 5000)) {
             mLastSendTime = now;
-            var msg = new Dictionary<String, Any>();
+            var msg = {};
             msg.put("type", "workoutStatus");
             var targetPace = 0.0f;
             if (info != null) {
