@@ -2,6 +2,7 @@
 #include "machine.h"
 #include "garmin_rsc.h"
 #include "serial_ctrl.h"
+#include "nus_ctrl.h"
 #include "button.h"
 #include "display.h"
 #include "display_format.h"
@@ -32,6 +33,7 @@ static void on_state(const treadmill_state_t *s) {
     s_last_state = *s;
     garmin_rsc_update(s);
     serial_ctrl_push_state(s);
+    nus_ctrl_push_state(s);
 }
 
 static void on_button(button_event_t e) {
@@ -124,6 +126,7 @@ static void render_task(void *arg) {
 void ui_start(void) {
     battery_init();
     garmin_rsc_start();
+    nus_ctrl_start();
     serial_ctrl_start();
     machine_set_data_cb(on_state);
     machine_try_last();   /* reconnect to last device, else scan */
