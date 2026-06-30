@@ -1,7 +1,7 @@
 /* Minimal libmtp uploader that targets a specific parent folder id — the
  * bundled mtp-sendfile/mtp-connect CLIs can only send to root, which Garmin's
  * CIQ loader ignores (apps must live in GARMIN/Apps).
- *   usage: mtp_send_to_folder <local> <remotename> <parent_folder_id>
+ *   usage: mtp_send_to_folder <local> <remotename> <parent_folder_id> [device_index]
  * Build: cc mtp_send_to_folder.c -I/opt/homebrew/include -L/opt/homebrew/lib -lmtp -o mtp_send_to_folder
  */
 #include <libmtp.h>
@@ -11,19 +11,24 @@
 #include <sys/stat.h>
 
 int main(int argc, char **argv) {
-    if (argc != 4) {
-        fprintf(stderr, "usage: %s <local> <remotename> <parent_id>\n", argv[0]);
+    if (argc < 4 || argc > 5) {
+        fprintf(stderr, "usage: %s <local> <remotename> <parent_id> [device_index]\n", argv[0]);
         return 2;
     }
     const char *local = argv[1], *remote = argv[2];
     uint32_t parent = (uint32_t)strtoul(argv[3], NULL, 0);
+    int dev_index = argc == 5 ? atoi(argv[4]) : 0;
 
     struct stat st;
     if (stat(local, &st) != 0) { perror("stat local"); return 1; }
 
     LIBMTP_Init();
-    LIBMTP_mtpdevice_t *dev = LIBMTP_Get_First_Device();
-    if (!dev) { fprintf(stderr, "no MTP device\n"); return 1; }
+    LIBMTP_mtpdevice_t *devlist = NULL;
+    LIBMTP_Get_Connected_Devices(&devlist);
+    if (!devlist) { fprintf(stderr, "no MTP devices\n"); return 1; }
+    LIBMTP_mtpdevice_t *dev = devlist;
+    for (int i = 0; i < dev_index && dev->next; i++) dev = dev->next;
+    if (!dev) { fprintf(stderr, "device index %d not found\n", dev_index); return 1; }
 
     uint32_t storage_id = dev->storage ? dev->storage->id : 0; /* primary storage */
 

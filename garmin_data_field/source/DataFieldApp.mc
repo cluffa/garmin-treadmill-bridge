@@ -23,7 +23,7 @@ class DataFieldApp extends Application.AppBase {
         return [ mView ];
     }
 
-    function onPhone(msg as Communications.Message) as Void {
+    function onPhone(msg as Communications.PhoneAppMessage) as Void {
         System.println("Received msg from phone: " + msg.data.toString());
         var data = msg.data;
         if (data instanceof Dictionary) {
