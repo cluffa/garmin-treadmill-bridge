@@ -1,6 +1,7 @@
-import 'dart:io';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import '../services/bridge_service.dart';
 import '../services/garmin_ciq_service.dart';
 
@@ -11,14 +12,10 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  bool _scanning = false;
-  final _hostController = TextEditingController(text: '192.168.4.1');
-
-  @override
-  void dispose() {
-    _hostController.dispose();
-    super.dispose();
-  }
+  bool _scanning = false;          // treadmill BLE scan (FTMS/iFit)
+  bool _bleScanning = false;       // ESP32 discovery scan
+  List<ScanResult> _bleResults = [];
+  StreamSubscription? _bleScanSub;
 
   @override
   Widget build(BuildContext context) {
@@ -32,6 +29,22 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  @override
+  void dispose() {
+    _bleScanSub?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _startBleDiscovery(BridgeService bridge) async {
+    setState(() { _bleScanning = true; _bleResults = []; });
+    _bleScanSub?.cancel();
+    _bleScanSub = bridge.scanStream.listen((results) {
+      if (mounted) setState(() => _bleResults = results);
+    });
+    await bridge.startBleScan();
+    if (mounted) setState(() => _bleScanning = false);
+  }
+
   // ── Connect screen ──────────────────────────────────────────────────────
 
   Widget _connectView(BridgeService bridge) => Center(
@@ -41,7 +54,7 @@ class _HomeScreenState extends State<HomeScreen> {
             const Text('Connect to ESP32 bridge',
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
             const SizedBox(height: 24),
-            if (Platform.isAndroid) ...[
+            if (bridge.canUsb) ...[
               ElevatedButton.icon(
                 icon: const Icon(Icons.usb),
                 label: const Text('Connect via USB Serial'),
@@ -57,27 +70,42 @@ class _HomeScreenState extends State<HomeScreen> {
               const Text('— or —', style: TextStyle(color: Colors.grey)),
               const SizedBox(height: 16),
             ],
-            TextField(
-              controller: _hostController,
-              decoration: const InputDecoration(
-                labelText: 'ESP32 IP address',
-                border: OutlineInputBorder(),
-                prefixIcon: Icon(Icons.wifi),
-              ),
-              keyboardType: TextInputType.number,
-            ),
-            const SizedBox(height: 12),
             ElevatedButton.icon(
-              icon: const Icon(Icons.wifi),
-              label: const Text('Connect via WiFi'),
-              onPressed: () async {
-                final ok = await bridge.connectWifi(_hostController.text.trim());
-                if (!ok && mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Could not connect to ESP32')));
-                }
-              },
+              icon: _bleScanning
+                  ? const SizedBox(
+                      width: 18, height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2,
+                          color: Colors.white))
+                  : const Icon(Icons.bluetooth_searching),
+              label: Text(_bleScanning ? 'Scanning…' : 'Scan for ESP32'),
+              onPressed: _bleScanning ? null : () => _startBleDiscovery(bridge),
             ),
+            if (_bleResults.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              ..._bleResults.map((r) => ListTile(
+                    leading: const Icon(Icons.bluetooth),
+                    title: Text(r.device.platformName.isNotEmpty
+                        ? r.device.platformName
+                        : r.device.remoteId.str),
+                    subtitle: Text('${r.rssi} dBm'),
+                    trailing: ElevatedButton(
+                      child: const Text('Connect'),
+                      onPressed: () async {
+                        final ok = await bridge.connectBle(r.device);
+                        if (!ok && mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                                content: Text('Could not connect to ESP32')));
+                        }
+                      },
+                    ),
+                  )),
+            ] else if (!_bleScanning)
+              const Padding(
+                padding: EdgeInsets.only(top: 12),
+                child: Text('Tap scan to find nearby bridges',
+                    style: TextStyle(color: Colors.grey)),
+              ),
           ]),
         ),
       );
@@ -109,10 +137,7 @@ class _HomeScreenState extends State<HomeScreen> {
           IconButton(
             icon: const Icon(Icons.link_off),
             tooltip: 'Disconnect',
-            onPressed: () {
-              bridge.dispose();
-              // Re-create via provider would normally happen; for now reload
-            },
+            onPressed: bridge.disconnect,
           ),
         ]),
       );
