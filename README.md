@@ -20,13 +20,12 @@ The system coordinates two independent data streams:
    * `Treadmill (FTMS/iFit)` -> `ESP32 (BLE Central)` -> `Garmin Watch (BLE RSC Peripheral)`
    * Re-broadcasts live speed and distance to the watch.
 
-2. **Garmin to Treadmill (Pending / TODO)**
+2. **Garmin to Treadmill (Implemented)**
    * `Garmin Watch (ConnectIQ DataField)` -> `Phone App (BLE)` -> `ESP32 (BLE NUS)` -> `Treadmill (FTMS/iFit Control)`
    * Sends the current Garmin workout target pace to automatically control the treadmill's speed.
-   * **Implementation Status:**
-     * **Watch -> Phone**: ConnectIQ DataField scaffolded (pending in `garmin-data-field` branch) and successfully transmits to the phone, but fetching the actual target pace from the Garmin API is TODO (currently hardcoded).
-     * **Phone -> ESP32**: Phone app uses BLE NUS (pending in `feat/ble-nus-phone-control` branch) to control the ESP32. CIQ message reception is wired up in `GarminCiqPlugin`, but translating the `workoutStatus` target pace message into a `speed` command is TODO.
-     * **ESP32 -> Treadmill**: Fully implemented. The ESP32 parses incoming `speed <x>` commands from the phone (via NUS) and writes the correct control characteristics to the treadmill.
+   * **Watch -> Phone**: ConnectIQ DataField reads `Activity.Info.currentWorkoutStep` for target pace; falls back to `currentSpeed`. Sends `workoutStatus` with `targetPace`, `targetPaceLow`, `targetPaceHigh` every 5s.
+   * **Phone -> ESP32**: Phone app receives `workoutStatus` via BLE NUS, converts target pace (m/s → km/h), and sends a `speed` command to the ESP32.
+   * **ESP32 -> Treadmill**: The ESP32 parses incoming `speed <x>` commands and writes the correct control characteristics to the treadmill.
 
 ## Repo layout
 

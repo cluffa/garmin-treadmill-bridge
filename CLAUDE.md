@@ -117,15 +117,14 @@ The primary implemented data stream broadcasts treadmill metrics to the watch:
 * `Treadmill (FTMS/iFit)` -> `ESP32 (BLE Central)` -> `Garmin Watch (BLE RSC Peripheral)`
 * The ESP32 connects to the treadmill, parses its proprietary or standard data frames into a generic `treadmill_state_t` via `bridge_core`, and then `garmin_rsc.c` handles exposing it as a standard BLE Running Speed and Cadence (RSC) sensor that any Garmin watch can pair with.
 
-## Reverse Data Stream (Garmin -> Treadmill) (TODO)
+## Reverse Data Stream (Garmin -> Treadmill)
 
-There is a pending feature to automatically control treadmill speed based on Garmin workout pace targets via a reverse data stream: `Garmin Watch (ConnectIQ)` -> `Phone App` -> `ESP32` -> `Treadmill`.
+Automatically controls treadmill speed based on Garmin workout pace targets: `Garmin Watch (ConnectIQ)` -> `Phone App` -> `ESP32` -> `Treadmill`. Fully implemented.
 
-Implementation status across pending branches:
-1. **Watch (`garmin-data-field` branch):** DataField reads `Activity.Info.currentWorkoutStep` for target pace (m/s); falls back to `currentSpeed`. Sends `workoutStatus` with `targetPace`, `targetPaceLow`, `targetPaceHigh` every 5s.
-2. **Phone App (`garmin-data-field` branch):** `garmin_ciq_service.dart` handles `workoutStatus` messages — converts target pace from m/s to km/h and calls `_bridge.setSpeed()`; exposes `targetSpeedLowKmh`/`targetSpeedHighKmh` getters.
-3. **Phone -> ESP32 Link (`feat/ble-nus-phone-control` branch):** Fully implemented. The Flutter app uses BLE NUS to send control strings (e.g. `speed 10.0`) to the ESP32.
-4. **ESP32 -> Treadmill:** Fully implemented. `nus_ctrl.c` and `ctrl_dispatch.c` parse incoming speed commands and apply them to the treadmill via FTMS/iFit.
+1. **Watch:** DataField reads `Activity.Info.currentWorkoutStep` for target pace (m/s); falls back to `currentSpeed`. Sends `workoutStatus` with `targetPace`, `targetPaceLow`, `targetPaceHigh` every 5s.
+2. **Phone App:** `garmin_ciq_service.dart` handles `workoutStatus` messages — converts target pace from m/s to km/h and calls `_bridge.setSpeed()`; exposes `targetSpeedLowKmh`/`targetSpeedHighKmh` getters.
+3. **Phone -> ESP32:** Flutter app uses BLE NUS to send control strings (e.g. `speed 10.0`) to the ESP32.
+4. **ESP32 -> Treadmill:** `nus_ctrl.c` and `ctrl_dispatch.c` parse incoming speed commands and apply them to the treadmill via FTMS/iFit.
 
 
 ## iFit / NordicTrack 6.5S (I_TL) protocol
