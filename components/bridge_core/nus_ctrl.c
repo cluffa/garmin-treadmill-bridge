@@ -8,6 +8,7 @@
  */
 
 #include "nus_ctrl.h"
+#include "garmin_rsc.h"
 #include "ctrl_dispatch.h"
 
 #include "host/ble_hs.h"
@@ -216,27 +217,38 @@ static int nus_gap_event_cb(struct ble_gap_event *event, void *arg);
 
 /* ---- advertising --------------------------------------------------------- */
 
+/*
+ * Single advertisement owned by nus_ctrl. Primary packet carries the NUS
+ * 128-bit UUID (phone filters on it). Scan response carries the RSC 16-bit
+ * UUID (0x1814) and device name so a Garmin watch's active scan finds the
+ * RSC sensor without a separate advertisement.
+ */
 static void start_advertising(void)
 {
     struct ble_gap_adv_params params = {
         .conn_mode = BLE_GAP_CONN_MODE_UND,
         .disc_mode = BLE_GAP_DISC_MODE_GEN,
-        .itvl_min  = BLE_GAP_ADV_ITVL_MS(200),
-        .itvl_max  = BLE_GAP_ADV_ITVL_MS(400),
+        .itvl_min  = BLE_GAP_ADV_ITVL_MS(100),
+        .itvl_max  = BLE_GAP_ADV_ITVL_MS(200),
     };
 
+    /* Primary: flags + NUS 128-bit UUID */
     struct ble_hs_adv_fields fields = { 0 };
-    fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
-    /* Advertise NUS service UUID so the phone's BLE scan can filter on it */
+    fields.flags                = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
     fields.uuids128             = &NUS_SVC_UUID;
     fields.num_uuids128         = 1;
     fields.uuids128_is_complete = 1;
 
+    /* Scan response: RSC 16-bit UUID + device name */
+    static ble_uuid16_t rsc_uuid = BLE_UUID16_INIT(0x1814);
     struct ble_hs_adv_fields rsp = { 0 };
-    const char *name = ble_svc_gap_device_name();
-    rsp.name             = (const uint8_t *)name;
-    rsp.name_len         = (uint8_t)strlen(name);
-    rsp.name_is_complete = 1;
+    rsp.uuids16             = &rsc_uuid;
+    rsp.num_uuids16         = 1;
+    rsp.uuids16_is_complete = 1;
+    const char *name        = ble_svc_gap_device_name();
+    rsp.name                = (const uint8_t *)name;
+    rsp.name_len            = (uint8_t)strlen(name);
+    rsp.name_is_complete    = 1;
 
     if (ble_gap_adv_set_fields(&fields) != 0 ||
         ble_gap_adv_rsp_set_fields(&rsp) != 0) {
@@ -248,7 +260,7 @@ static void start_advertising(void)
     if (rc != 0)
         ESP_LOGE(TAG, "ble_gap_adv_start failed: %d", rc);
     else
-        ESP_LOGI(TAG, "NUS advertising started");
+        ESP_LOGI(TAG, "NUS+RSC advertising started");
 }
 
 /* ---- GAP event handler --------------------------------------------------- */
@@ -256,6 +268,9 @@ static void start_advertising(void)
 static int nus_gap_event_cb(struct ble_gap_event *event, void *arg)
 {
     (void)arg;
+    /* Let garmin_rsc track subscriptions on its own handles. */
+    garmin_rsc_on_gap_event(event);
+
     switch (event->type) {
 
     case BLE_GAP_EVENT_CONNECT:
