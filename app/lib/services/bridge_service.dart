@@ -45,6 +45,10 @@ class BridgeService extends ChangeNotifier {
 
   Future<void> startBleScan() async {
     final results = <String, ScanResult>{};
+    if (FlutterBluePlus.adapterStateNow != BluetoothAdapterState.on) {
+      await FlutterBluePlus.adapterState
+          .firstWhere((s) => s == BluetoothAdapterState.on);
+    }
     await FlutterBluePlus.stopScan();
     _scanSub?.cancel();
     _scanSub = FlutterBluePlus.scanResults.listen((list) {
@@ -67,8 +71,8 @@ class BridgeService extends ChangeNotifier {
       await device.connect(timeout: const Duration(seconds: 10));
 
       // Request a larger MTU so multi-device LIST responses fit in one notify.
-      // ponytail: iOS negotiates MTU automatically; Android needs this call.
-      if (!defaultTargetPlatform.toString().contains('iOS')) {
+      // ponytail: Darwin (iOS/macOS) negotiates MTU automatically; Android needs this call.
+      if (defaultTargetPlatform == TargetPlatform.android) {
         await device.requestMtu(512);
       }
 
