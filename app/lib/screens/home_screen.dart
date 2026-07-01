@@ -304,7 +304,11 @@ class _HomeScreenState extends State<HomeScreen> {
               title: Text(garmin.deviceConnected
                   ? (garmin.deviceName ?? 'Watch connected')
                   : 'No watch connected'),
-              subtitle: const Text('via Garmin Connect Mobile'),
+              subtitle: Text(garmin.deviceConnected
+                  ? (garmin.receivingData
+                      ? 'Receiving data from watch app'
+                      : 'Paired, but no data from watch app')
+                  : 'via Garmin Connect Mobile'),
               trailing: IconButton(
                 icon: const Icon(Icons.refresh),
                 tooltip: 'Refresh',
@@ -328,6 +332,14 @@ class _HomeScreenState extends State<HomeScreen> {
               garmin.watchCurrentSpeedKmh != null
                   ? '${garmin.watchCurrentSpeedKmh!.toStringAsFixed(2)} km/h'
                   : '--'),
+          const SizedBox(height: 16),
+          const Text('Debug: raw last message from watch',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          const SizedBox(height: 8),
+          SelectableText(
+            garmin.lastRawCommand ?? '(none received yet)',
+            style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
+          ),
         ]),
       );
 

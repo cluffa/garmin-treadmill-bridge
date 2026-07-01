@@ -3,7 +3,10 @@ import Flutter
 #if canImport(ConnectIQ)
 import ConnectIQ
 
-private let kAppUUID = UUID(uuidString: "a3421fee-d6d4-4e69-8bcd-42ac52e81013")!
+// Must match the id="..." in garmin_data_field/manifest.xml — Connect IQ filters
+// registerForAppMessages/sendMessage by this UUID, so a mismatch here means the
+// watch app transmits and the phone never receives it, silently.
+private let kAppUUID = UUID(uuidString: "e0123456-7890-1234-5678-123456789012")!
 private let kURLScheme = "garmin-ftms-sync"
 
 class GarminCiqPlugin: NSObject, IQDeviceEventDelegate, IQAppMessageDelegate {
@@ -38,6 +41,16 @@ class GarminCiqPlugin: NSObject, IQDeviceEventDelegate, IQAppMessageDelegate {
         }
         let names = devices.map { ["name": $0.friendlyName as Any, "model": $0.modelName as Any] }
         channel.invokeMethod("onDevices", arguments: names)
+        // getDeviceStatus only reflects state as of registration; deviceStatusChanged
+        // only fires on a future transition, so query the current status now or an
+        // already-connected watch never reports as connected.
+        for device in devices {
+            let status = ConnectIQ.sharedInstance().getDeviceStatus(device)
+            channel.invokeMethod("onDeviceStatus", arguments: [
+                "connected": status == .connected,
+                "name": device.friendlyName as Any
+            ])
+        }
     }
 
     private func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {

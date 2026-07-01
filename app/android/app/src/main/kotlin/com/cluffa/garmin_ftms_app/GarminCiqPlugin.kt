@@ -3,6 +3,7 @@ package com.cluffa.garmin_ftms_app
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import com.garmin.android.connectiq.ConnectIQ
 import com.garmin.android.connectiq.IQApp
 import com.garmin.android.connectiq.IQDevice
@@ -12,7 +13,11 @@ import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 
-private const val APP_UUID = "a3421fee-d6d4-4e69-8bcd-42ac52e81013"
+// Must match the id="..." in garmin_data_field/manifest.xml — Connect IQ filters
+// registerForAppEvents/sendMessage by this UUID, so a mismatch here means the
+// watch app transmits and the phone never receives it, silently.
+private const val APP_UUID = "e0123456-7890-1234-5678-123456789012"
+private const val TAG = "GarminCiqPlugin"
 
 class GarminCiqPlugin(
     private val context: Context,
@@ -25,25 +30,30 @@ class GarminCiqPlugin(
     private var sdkReady = false
     private var devices: List<IQDevice> = emptyList()
 
-    // Retry loading devices every 5s until at least one is found
-    private val retryLoad = object : Runnable {
-        override fun run() {
-            if (sdkReady && devices.isEmpty()) {
-                loadDevices()
-                handler.postDelayed(this, 5000)
-            }
+    // Retry loading devices every 5s until at least one is found.
+    // loadDevices() itself re-schedules this when devices are still empty —
+    // do not also reschedule here, or every cycle doubles the number of
+    // pending callbacks (1, 2, 4, 8, ...), spiraling into a runaway loop.
+    private val retryLoad = Runnable {
+        if (sdkReady && devices.isEmpty()) {
+            loadDevices()
         }
     }
 
     init {
         channel.setMethodCallHandler(this)
         connectIQ.initialize(context, true, object : ConnectIQ.ConnectIQListener {
-            override fun onInitializeError(err: ConnectIQ.IQSdkErrorStatus) { sdkReady = false }
+            override fun onInitializeError(err: ConnectIQ.IQSdkErrorStatus) {
+                Log.w(TAG, "onInitializeError: $err")
+                sdkReady = false
+            }
             override fun onSdkReady() {
+                Log.d(TAG, "onSdkReady")
                 sdkReady = true
                 loadDevices()
             }
             override fun onSdkShutDown() {
+                Log.d(TAG, "onSdkShutDown")
                 sdkReady = false
                 handler.removeCallbacks(retryLoad)
             }
@@ -80,8 +90,10 @@ class GarminCiqPlugin(
     }
 
     private fun loadDevices() {
+        Log.d(TAG, "loadDevices: sdkReady=$sdkReady")
         try {
             devices = connectIQ.connectedDevices ?: emptyList()
+            Log.d(TAG, "connectedDevices -> ${devices.map { it.friendlyName }}")
             channel.invokeMethod("onDevices", devices.map { mapOf("name" to it.friendlyName) })
             for (device in devices) {
                 channel.invokeMethod("onDeviceStatus", mapOf(
@@ -90,11 +102,13 @@ class GarminCiqPlugin(
                 ))
                 val app = IQApp(APP_UUID)
                 connectIQ.registerForAppEvents(device, app) { _, _, message, _ ->
+                    Log.d(TAG, "onAppEvent from ${device.friendlyName}: $message")
                     (message?.firstOrNull() as? Map<*, *>)?.let { dict ->
                         channel.invokeMethod("onCommand", dict.mapKeys { it.key.toString() })
                     }
                 }
                 connectIQ.registerForDeviceEvents(device) { dev, status ->
+                    Log.d(TAG, "onDeviceEvent ${dev.friendlyName} -> $status")
                     channel.invokeMethod("onDeviceStatus", mapOf(
                         "connected" to (status == IQDevice.IQDeviceStatus.CONNECTED),
                         "name" to dev.friendlyName,
@@ -102,9 +116,26 @@ class GarminCiqPlugin(
                 }
             }
             if (devices.isEmpty()) {
-                handler.postDelayed(retryLoad, 5000)
+                Log.d(TAG, "no connected devices, scheduling retry")
+                scheduleRetry()
             }
-        } catch (_: InvalidStateException) {
+        } catch (e: InvalidStateException) {
+            Log.w(TAG, "loadDevices: InvalidStateException", e)
+        } catch (e: ServiceUnavailableException) {
+            // Garmin Connect Mobile's AIDL binder call died (RemoteException) — the
+            // service is transiently unreachable (GCM backgrounded/killed, BT churn).
+            // Without this, the uncaught exception aborts loadDevices() permanently:
+            // no devices, no retry, and status never recovers even once GCM comes back.
+            Log.w(TAG, "loadDevices: ServiceUnavailableException, scheduling retry", e)
+            scheduleRetry()
         }
+    }
+
+    // Handler.postDelayed does not dedupe: calling this twice before the first
+    // fires (e.g. two rapid selectDevice taps) queues two separate callbacks.
+    // removeCallbacks first guarantees at most one retryLoad is ever pending.
+    private fun scheduleRetry() {
+        handler.removeCallbacks(retryLoad)
+        handler.postDelayed(retryLoad, 5000)
     }
 }
