@@ -8,17 +8,20 @@ import Toybox.System;
 class DataFieldView extends WatchUi.DataField {
     hidden var mConnectionStatus as String;
     hidden var mLastSendTime as Number;
+    hidden var mLastMsgTime as Number;
     hidden var mSpeed as Float;
 
     function initialize() {
         DataField.initialize();
         mConnectionStatus = "Disconnected";
         mLastSendTime = 0;
+        mLastMsgTime = 0;
         mSpeed = 0.0f;
     }
 
     function setSpeed(speed as Float) as Void {
         mSpeed = speed;
+        mLastMsgTime = System.getTimer();
         WatchUi.requestUpdate();
     }
 
@@ -26,21 +29,18 @@ class DataFieldView extends WatchUi.DataField {
     }
 
     function compute(info as Activity.Info) as Void {
-        var settings = System.getDeviceSettings();
-        var status = false;
-        if (settings has :phoneConnected) {
-            status = settings.phoneConnected;
-        }
-
-        if (status) {
+        var now = System.getTimer();
+        // Connected = received a message from our phone app in the last 10s
+        if (mLastMsgTime > 0 && (now - mLastMsgTime < 10000)) {
             mConnectionStatus = "Connected";
         } else {
             mConnectionStatus = "Disconnected";
         }
 
-        var now = System.getTimer();
         // Send current workout status (target pace) every 5 seconds
-        if (status && (now - mLastSendTime > 5000)) {
+        var settings = System.getDeviceSettings();
+        var phonePaired = (settings has :phoneConnected) && settings.phoneConnected;
+        if (phonePaired && (now - mLastSendTime > 5000)) {
             mLastSendTime = now;
             var msg = {};
             msg.put("type", "workoutStatus");

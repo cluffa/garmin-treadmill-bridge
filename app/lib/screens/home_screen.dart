@@ -23,9 +23,11 @@ class _HomeScreenState extends State<HomeScreen> {
     final garmin = context.watch<GarminCiqService>();
     return Scaffold(
       appBar: AppBar(title: const Text('FTMS Sync')),
-      body: bridge.connectionMode == 'disconnected'
-          ? _connectView(bridge)
-          : _mainView(bridge, garmin),
+      body: SafeArea(
+        child: bridge.connectionMode == 'disconnected'
+            ? _connectView(bridge)
+            : _mainView(bridge, garmin),
+      ),
     );
   }
 
@@ -271,7 +273,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   : () async {
                       setState(() => _scanning = true);
                       await bridge.scan();
-                      await Future.delayed(const Duration(seconds: 8));
+                      await Future.delayed(const Duration(seconds: 15));
                       await bridge.fetchList();
                       if (mounted) setState(() => _scanning = false);
                     },

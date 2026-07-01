@@ -69,6 +69,12 @@ class GarminCiqPlugin(
             val names = devices.map { mapOf("name" to it.friendlyName) }
             channel.invokeMethod("onDevices", names)
             for (device in devices) {
+                // connectedDevices only returns devices that are already connected,
+                // so report status immediately rather than waiting for a change event.
+                channel.invokeMethod("onDeviceStatus", mapOf(
+                    "connected" to true,
+                    "name" to device.friendlyName,
+                ))
                 val app = IQApp(APP_UUID)
                 connectIQ.registerForAppEvents(device, app) { dev, _, message, _ ->
                     (message?.firstOrNull() as? Map<*, *>)?.let { dict ->
