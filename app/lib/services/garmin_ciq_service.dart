@@ -9,22 +9,36 @@ class GarminCiqService extends ChangeNotifier {
 
   final BridgeService _bridge;
   StreamSubscription? _stateSub;
+  Timer? _staleTimer;
 
   bool _deviceConnected = false;
   String? _deviceName;
   double? _targetSpeedLowKmh;
   double? _targetSpeedHighKmh;
   double? _watchCurrentSpeedKmh;
+  String? _lastRawCommand;
+  DateTime? _lastMessageAt;
 
   bool get deviceConnected => _deviceConnected;
   String? get deviceName => _deviceName;
   double? get targetSpeedLowKmh => _targetSpeedLowKmh;
   double? get targetSpeedHighKmh => _targetSpeedHighKmh;
   double? get watchCurrentSpeedKmh => _watchCurrentSpeedKmh;
+  // ponytail: debug-only, raw unformatted payload from the last onCommand call
+  String? get lastRawCommand => _lastRawCommand;
+  // True once an actual app message has arrived recently — distinct from
+  // deviceConnected, which only reflects the BLE-level pairing and can be
+  // true while the watch app UUID mismatches and nothing is really flowing.
+  bool get receivingData =>
+      _lastMessageAt != null &&
+      DateTime.now().difference(_lastMessageAt!) < const Duration(seconds: 10);
 
   GarminCiqService(this._bridge) {
     _channel.setMethodCallHandler(_onNativeCall);
     _stateSub = _bridge.stateStream.listen(_pushState);
+    // receivingData is time-based (staleness), so it needs a tick even when no
+    // new message arrives to flip back to "not receiving" after the timeout.
+    _staleTimer = Timer.periodic(const Duration(seconds: 3), (_) => notifyListeners());
   }
 
   Future<void> selectDevice() => _channel.invokeMethod('selectDevice');
@@ -33,6 +47,8 @@ class GarminCiqService extends ChangeNotifier {
     final args = call.arguments as Map?;
     switch (call.method) {
       case 'onCommand':
+        _lastRawCommand = args?.toString();
+        _lastMessageAt = DateTime.now();
         final type = args?['type'] as String?;
         final value = (args?['value'] as num?)?.toDouble();
         if (type == 'speed' && value != null) await _bridge.setSpeed(value);
@@ -49,8 +65,8 @@ class GarminCiqService extends ChangeNotifier {
           if (targetPace != null && targetPace > 0) {
             await _bridge.setSpeed(targetPace * 3.6);
           }
-          notifyListeners();
         }
+        notifyListeners();
       case 'onDeviceStatus':
         _deviceConnected = args?['connected'] as bool? ?? false;
         _deviceName = args?['name'] as String?;
@@ -73,6 +89,7 @@ class GarminCiqService extends ChangeNotifier {
   @override
   void dispose() {
     _stateSub?.cancel();
+    _staleTimer?.cancel();
     super.dispose();
   }
 }

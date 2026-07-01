@@ -1,7 +1,7 @@
 name: garmin_ftms_app
 description: "Garmin FTMS Sync — control app for the ESP32 treadmill bridge."
 publish_to: 'none'
-version: 26.6.30+3
+version: 26.6.30+5
 
 environment:
   sdk: ^3.12.2

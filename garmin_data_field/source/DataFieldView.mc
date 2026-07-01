@@ -11,6 +11,7 @@ class DataFieldView extends WatchUi.DataField {
     hidden var mLastMsgTime as Number;
     hidden var mSpeed as Float;          // treadmill speed from phone (km/h)
     hidden var mTargetPaceStr as String; // formatted target from workout step
+    hidden var mDebugStr as String;      // raw, unformatted currentWorkoutStep dump
 
     function initialize() {
         DataField.initialize();
@@ -19,6 +20,7 @@ class DataFieldView extends WatchUi.DataField {
         mLastMsgTime = 0;
         mSpeed = 0.0f;
         mTargetPaceStr = "--:-- tgt";
+        mDebugStr = "no step";
     }
 
     function setSpeed(speed as Float) as Void {
@@ -28,6 +30,11 @@ class DataFieldView extends WatchUi.DataField {
     }
 
     function onLayout(dc as Dc) as Void {
+    }
+
+    // null.toString() crashes in Monkey C — this is the safe version.
+    hidden function _dbg(x) as String {
+        return (x == null) ? "null" : x.toString();
     }
 
     hidden function _paceStrFromMs(speedMs as Float) as String {
@@ -49,26 +56,34 @@ class DataFieldView extends WatchUi.DataField {
         var targetPaceHighMs = 0.0f;
         var currentSpeedMs = 0.0f;
 
-        if (info != null) {
-            if (info.currentSpeed != null) {
-                currentSpeedMs = info.currentSpeed as Float;
+        if (info != null && info.currentSpeed != null) {
+            currentSpeedMs = info.currentSpeed as Float;
+        }
+
+        // Activity.getCurrentWorkoutStep() is the module-level function — distinct
+        // from (and apparently more reliable in a DataField's compute() context
+        // than) the Activity.Info.currentWorkoutStep property, which came back
+        // null even mid-workout.
+        var infoHasStep = (info != null) && (info has :currentWorkoutStep) && (info.currentWorkoutStep != null);
+        var wStep = Activity.getCurrentWorkoutStep();
+        mDebugStr = "getCurrentWorkoutStep()=" + _dbg(wStep) + " info.currentWorkoutStep=" + infoHasStep.toString();
+        if (wStep != null) {
+            if ((wStep has :step) && wStep.step != null) {
+                wStep = wStep.step;
+                mDebugStr += " .step=" + _dbg(wStep);
             }
-            if ((info has :currentWorkoutStep) && info.currentWorkoutStep != null) {
-                var wStep = info.currentWorkoutStep;
-                if ((wStep has :step) && wStep.step != null) {
-                    wStep = wStep.step;
-                }
-                if ((wStep has :targetType) &&
-                    wStep.targetType == Activity.WORKOUT_STEP_TARGET_SPEED) {
-                    if ((wStep has :targetValueLow) && wStep.targetValueLow != null) {
-                        targetPaceLowMs = wStep.targetValueLow as Float;
-                    }
-                    if ((wStep has :targetValueHigh) && wStep.targetValueHigh != null) {
-                        targetPaceHighMs = wStep.targetValueHigh as Float;
-                    }
-                }
+            var rawTargetType = (wStep has :targetType) ? wStep.targetType : null;
+            var rawLow = (wStep has :targetValueLow) ? wStep.targetValueLow : null;
+            var rawHigh = (wStep has :targetValueHigh) ? wStep.targetValueHigh : null;
+            mDebugStr += " targetType=" + _dbg(rawTargetType)
+                + " (SPEED=" + Activity.WORKOUT_STEP_TARGET_SPEED.toString() + ")"
+                + " low=" + _dbg(rawLow) + " high=" + _dbg(rawHigh);
+            if (rawTargetType == Activity.WORKOUT_STEP_TARGET_SPEED) {
+                if (rawLow != null) { targetPaceLowMs = rawLow as Float; }
+                if (rawHigh != null) { targetPaceHighMs = rawHigh as Float; }
             }
         }
+        System.println("[debug] " + mDebugStr);
 
         // Update target pace display string
         var targetMidMs = 0.0f;
@@ -130,6 +145,10 @@ class DataFieldView extends WatchUi.DataField {
 
         // Connection status (bottom)
         dc.drawText(w / 2, h * 3 / 4, Graphics.FONT_XTINY, mConnectionStatus,
+            Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
+
+        // Debug: raw currentWorkoutStep dump, unformatted (very bottom)
+        dc.drawText(w / 2, h * 15 / 16, Graphics.FONT_XTINY, mDebugStr,
             Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
     }
 }
