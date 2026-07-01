@@ -141,3 +141,36 @@ Notification frame format:
 - Speed: `(b[10] | b[11]<<8) / 100` → km/h
 - Incline: signed `(b[12] | b[13]<<8) / 100` → %
 - Frame length: exactly 20 bytes
+
+### Outgoing control (SPEED/INCLINE/STOP over serial/NUS)
+
+`machine_ifit_set_speed`/`_set_incline`/`_stop` (`machine_ifit.c`) queue a request
+(`s_req_speed`/`s_req_incline`) rather than writing immediately. **Control writes
+must be injected at a specific phase of the 6-phase keepalive poll, not fired
+ad hoc** — the treadmill firmware silently ignores writes sent outside that slot.
+This was confirmed on hardware: an immediate write did nothing, while injecting at
+the right phase moved the belt.
+
+- Speed/incline writes go out at **poll phase 2**, immediately after the
+  `POLL2`/`noOpData3` frame — matches `qdomyos-zwift`'s `case 2` in its own poll
+  switch. Frame: `{0xff,0x0d,0x02,0x04,0x02,0x09,0x04,0x09,0x02,0x01,<kind>,<lo>,<hi>,0,0,0,0,0,0,0}`
+  preceded by a `{0xfe,0x02,0x0d,0x02}` no-op, `kind` = `0x01` speed / `0x02`
+  incline, value ×100 little-endian in bytes 11–12, checksum byte 14 =
+  `lo_byte + 0x12` (the `nordictrack_t65s_treadmill` branch's formula — see
+  `forceSpeed`/`forceIncline` in `proformtreadmill.cpp`).
+- **`forceSpeed` only changes speed while the belt is already moving.** From a
+  dead stop it does nothing — you must first send the 5-frame `START_SEQ`
+  (`nordictrack_t65s_treadmill_81_miles` variant) at **poll phase 5**, right
+  after the `POLL5`/`noOpData6` frame. `machine_ifit.c` tracks the last decoded
+  speed (`s_cur_speed_kmh`) from notifications and auto-fires `START_SEQ` when a
+  nonzero speed is requested while stopped; the pending speed request is then
+  applied once the belt is confirmed moving.
+- Known side effect, not something we send deliberately: any BLE speed command
+  (belt-start or plain speed change) makes the treadmill's own console display a
+  "3:00" countdown. Confirmed via GATT write logs that this happens even for a
+  plain phase-2 `forceSpeed` with no `START_SEQ` involved, so it's inherent
+  console behavior for BLE/manual-mode control, not a bug in our frames.
+  Harmless; unexplored whether any frame field can suppress it.
+- Hardware-verified end to end: belt at 13.19 km/h → 7.8 → 8.0 km/h speed
+  changes while moving, and a full restart from a stopped belt (0 → 9.66 km/h)
+  via `START_SEQ`.

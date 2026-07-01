@@ -210,13 +210,16 @@ int8_t machine_conn_rssi(void) {
 }
 
 bool machine_set_speed(float kmh) {
+    if (machine_ifit_connected()) return machine_ifit_set_speed(kmh);
     return machine_ftms_set_speed(kmh);
 }
 
 bool machine_set_incline(float pct) {
+    if (machine_ifit_connected()) return machine_ifit_set_incline(pct);
     return machine_ftms_set_incline(pct);
 }
 
 bool machine_stop(void) {
+    if (machine_ifit_connected()) return machine_ifit_stop();
     return machine_ftms_stop();
 }

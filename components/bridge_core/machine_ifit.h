@@ -23,3 +23,6 @@ void   machine_ifit_disconnect(void);
 bool   machine_ifit_connected(void);
 bool   machine_ifit_connecting(void);
 int8_t machine_ifit_conn_rssi(void);
+bool   machine_ifit_set_speed(float kmh);
+bool   machine_ifit_set_incline(float pct);
+bool   machine_ifit_stop(void);

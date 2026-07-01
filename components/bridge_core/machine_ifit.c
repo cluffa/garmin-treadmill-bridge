@@ -91,6 +91,21 @@ static const ifit_cmd_t POLL_SEQ[] = {
 };
 #define N_POLL ((int)(sizeof POLL_SEQ / sizeof POLL_SEQ[0]))
 
+/* Belt-start sequence (nordictrack_t65s_treadmill_81_miles variant) — required to
+ * get the belt moving from a dead stop; forceSpeed() alone only adjusts speed while
+ * already moving. Sent right after POLL5/noOpData6, same as the vendor's case 5.
+ * (qdomyos-zwift proformtreadmill.cpp, requestStart handling) */
+static const uint8_t START_01[] = {0xfe,0x02,0x20,0x03};
+static const uint8_t START_02[] = {0x00,0x12,0x02,0x04,0x02,0x1c,0x04,0x1c,0x02,0x09,0x00,0x00,0x40,0x02,0x18,0x40,0x00,0x00,0x80,0x30};
+static const uint8_t START_03[] = {0xff,0x0e,0x2a,0x00,0x00,0xc7,0x20,0x58,0x02,0x00,0xb4,0x00,0x58,0x02,0x00,0xee,0x00,0x00,0x00,0x00};
+static const uint8_t START_04[] = {0xfe,0x02,0x11,0x02};
+static const uint8_t START_05[] = {0xff,0x11,0x02,0x04,0x02,0x0d,0x04,0x0d,0x02,0x02,0x03,0x10,0xa0,0x00,0x00,0x00,0x0a,0x00,0xd2,0x00};
+static const ifit_cmd_t START_SEQ[] = {
+    {START_01,sizeof START_01},{START_02,sizeof START_02},{START_03,sizeof START_03},
+    {START_04,sizeof START_04},{START_05,sizeof START_05},
+};
+#define N_START ((int)(sizeof START_SEQ / sizeof START_SEQ[0]))
+
 /* ---- state -------------------------------------------------------------- */
 
 static machine_state_cb s_cb;
@@ -153,6 +168,37 @@ static void poll_write(const uint8_t *d, uint16_t n) {
     ble_gattc_write_no_rsp_flat(s_conn_handle, s_write_handle, d, n);
 }
 
+/* NordicTrack 6.5S speed/incline control write (qdomyos-zwift proformtreadmill.cpp,
+ * forceSpeed/forceIncline, nordictrack_t65s_treadmill branch: checksum = low byte + 0x12).
+ * Preceded by a no-op frame, same as the vendor driver. Value is *100, little-endian,
+ * already in the km/h / % units ifit_parse.c decodes notifications into.
+ *
+ * IMPORTANT: the vendor driver only ever calls this from inside its poll state
+ * machine's "case 2" step (right after writing the POLL2/noOpData3 frame) — control
+ * writes fired outside that slot are ignored by the treadmill firmware. See
+ * s_req_speed/s_req_incline below; do not call ctrl_write() directly from the
+ * public API. */
+static void ctrl_write(uint8_t kind /* 0x01=speed, 0x02=incline */, float value) {
+    static const uint8_t noop[] = {0xfe, 0x02, 0x0d, 0x02};
+    uint8_t w[] = {0xff, 0x0d, 0x02, 0x04, 0x02, 0x09, 0x04, 0x09, 0x02, 0x01,
+                   kind, 0xbc, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    uint16_t v = (uint16_t)(value * 100.0f);
+    w[11] = v & 0xFF;
+    w[12] = (v >> 8) & 0xFF;
+    w[14] = w[11] + 0x12;
+    poll_write(noop, sizeof noop);
+    poll_write(w, sizeof w);
+}
+
+/* Pending control requests, applied only at poll phase 2 (see ctrl_write comment).
+ * Sentinels match the vendor driver's requestSpeed/requestInclination conventions. */
+#define REQ_SPEED_NONE   -1.0f
+#define REQ_INCLINE_NONE -100.0f
+static float s_req_speed    = REQ_SPEED_NONE;
+static float s_req_incline  = REQ_INCLINE_NONE;
+static float s_cur_speed_kmh;   /* last decoded speed, from handle_notify */
+static bool  s_req_start;       /* belt is stopped and a nonzero speed was requested */
+
 static void poll_cb(void *arg) {
     (void)arg;
     if (s_poll_step < N_INIT) {
@@ -165,6 +211,27 @@ static void poll_cb(void *arg) {
     int phase = (s_poll_step - N_INIT) % N_POLL;
     const ifit_cmd_t *c = &POLL_SEQ[phase];
     poll_write(c->d, c->n);
+    if (phase == 2) {
+        if (s_req_incline != REQ_INCLINE_NONE) {
+            float i = s_req_incline < 0 ? 0 : s_req_incline;
+            if (i <= 15) ctrl_write(0x02, i);
+            s_req_incline = REQ_INCLINE_NONE;
+        }
+        if (s_req_speed != REQ_SPEED_NONE) {
+            /* forceSpeed only takes effect while the belt is already moving; a
+             * stopped belt needs the START_SEQ (case 5) first — see below. Keep
+             * the request pending until the belt actually starts moving. */
+            if (s_req_speed > 0 && s_cur_speed_kmh <= 0) {
+                s_req_start = true;
+            } else if (s_req_speed >= 0 && s_req_speed <= 22) {
+                ctrl_write(0x01, s_req_speed);
+                s_req_speed = REQ_SPEED_NONE;
+            }
+        }
+    } else if (phase == 5 && s_req_start) {
+        for (int i = 0; i < N_START; i++) poll_write(START_SEQ[i].d, START_SEQ[i].n);
+        s_req_start = false;
+    }
     s_poll_step++;
 }
 
@@ -212,6 +279,7 @@ static void handle_notify(struct os_mbuf *om) {
         }
     }
     s_last_rx_us = now;
+    s_cur_speed_kmh = speed_mps * 3.6f;
 
     treadmill_state_t st = {
         .speed_mps = speed_mps,
@@ -283,7 +351,8 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg) {
         if (event->connect.status != 0) { if (s_evt_cb) s_evt_cb(0); break; }
         s_conn_handle = event->connect.conn_handle;
         s_notify_handle = s_write_handle = s_svc_end = 0;
-        s_distance_m = 0; s_last_rx_us = 0;
+        s_distance_m = 0; s_last_rx_us = 0; s_cur_speed_kmh = 0;
+        s_req_speed = REQ_SPEED_NONE; s_req_incline = REQ_INCLINE_NONE; s_req_start = false;
         if (s_evt_cb) s_evt_cb(1);
         ble_gattc_disc_svc_by_uuid(s_conn_handle, &IFIT_SVC.u, svc_disc_cb, NULL);
         break;
@@ -349,6 +418,20 @@ void machine_ifit_disconnect(void) {
 bool machine_ifit_connected(void) { return s_conn_handle != BLE_HS_CONN_HANDLE_NONE; }
 bool machine_ifit_connecting(void) { return s_connecting; }
 bool machine_ifit_is_ifit_adv(const uint8_t *data, uint8_t len) { return adv_has_ifit(data, len); }
+
+bool machine_ifit_set_speed(float kmh) {
+    if (!machine_ifit_connected()) return false;
+    s_req_speed = kmh;
+    return true;
+}
+
+bool machine_ifit_set_incline(float pct) {
+    if (!machine_ifit_connected()) return false;
+    s_req_incline = pct;
+    return true;
+}
+
+bool machine_ifit_stop(void) { return machine_ifit_set_speed(0); }
 
 int8_t machine_ifit_conn_rssi(void) {
     int8_t r = 0;
