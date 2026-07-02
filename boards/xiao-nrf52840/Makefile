@@ -27,7 +27,9 @@ $(OUTPUT_DIRECTORY)/nrf52840_xxaa.out: LINKER_SCRIPT := xiao_nrf52840_s340.ld
 SRC_FILES += \
   $(PROJ_DIR)/main.c \
   $(PROJ_DIR)/platform_ant_sdm.c \
+  $(PROJ_DIR)/platform_ble_central.c \
   $(CORE_DIR)/ant_sdm_encode.c \
+  $(CORE_DIR)/ftms_parse.c \
 
 # SDK: startup + system
 SRC_FILES += \

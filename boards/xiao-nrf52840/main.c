@@ -21,6 +21,7 @@
 #include "nrf_sdh_ble.h"
 
 #include "platform_ant_sdm.h"
+#include "platform_ble_central.h"
 
 #define HEARTBEAT_MS 1000
 
@@ -30,6 +31,14 @@ static void heartbeat_cb(void *ctx)
 {
     (void)ctx;
     nrf_gpio_pin_toggle(LED_2 /* green */);
+}
+
+static void on_treadmill_state(const treadmill_state_t *s)
+{
+    platform_ant_sdm_set_state(s);
+    NRF_LOG_DEBUG("tm_state speed=" NRF_LOG_FLOAT_MARKER
+                  " incline=" NRF_LOG_FLOAT_MARKER,
+                  NRF_LOG_FLOAT(s->speed_mps), NRF_LOG_FLOAT(s->incline_pct));
 }
 
 static void log_init(void)
@@ -86,13 +95,9 @@ int main(void)
 
     platform_ant_sdm_init();
 
-    /* Task A2 bench state: fixed 2.5 m/s so a watch/ANT sniffer can verify
-     * the footpod broadcast before the treadmill link exists. Replaced by
-     * the BLE-central state callback in Task A3. */
-    treadmill_state_t test_state = {
-        .speed_mps = 2.5f, .distance_m = 0, .incline_pct = 0, .elapsed_s = 0,
-    };
-    platform_ant_sdm_set_state(&test_state);
+    /* Forward path: treadmill frames → shared state → ANT+ SDM broadcast. */
+    platform_ble_central_init(on_treadmill_state);
+    platform_ble_central_start_scan();
 
     for (;;) {
         if (!NRF_LOG_PROCESS()) {
