@@ -93,11 +93,23 @@ class DataFieldView extends WatchUi.DataField {
         var h = dc.getHeight();
 
         // Workout target pace (top)
-        dc.drawText(w / 2, h / 3, Graphics.FONT_MEDIUM, mTargetPaceStr,
+        dc.drawText(w / 2, h / 4, Graphics.FONT_MEDIUM, mTargetPaceStr,
             Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
 
         // Last command sent (middle)
-        dc.drawText(w / 2, h * 2 / 3, Graphics.FONT_XTINY, mLastSentStr,
+        dc.drawText(w / 2, h / 2, Graphics.FONT_XTINY, mLastSentStr,
+            Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
+
+        // Bridge link state (bottom): CONN / SCAN / --
+        var link = "--";
+        if (mBle != null) {
+            if (mBle.isConnected()) {
+                link = "CONN";
+            } else if (mBle.isScanning()) {
+                link = "SCAN";
+            }
+        }
+        dc.drawText(w / 2, h * 3 / 4, Graphics.FONT_XTINY, link,
             Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
     }
 }
