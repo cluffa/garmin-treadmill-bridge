@@ -18,6 +18,7 @@ class GarminCiqService extends ChangeNotifier {
   double? _watchCurrentSpeedKmh;
   String? _lastRawCommand;
   DateTime? _lastMessageAt;
+  double? _lastCommandedKmh;
 
   bool get deviceConnected => _deviceConnected;
   String? get deviceName => _deviceName;
@@ -62,8 +63,19 @@ class GarminCiqService extends ChangeNotifier {
           _targetSpeedLowKmh = rawLow != null ? rawLow * 3.6 : null;
           _targetSpeedHighKmh = rawHigh != null ? rawHigh * 3.6 : null;
           _watchCurrentSpeedKmh = rawCurrent != null ? rawCurrent * 3.6 : null;
-          if (targetPace != null && targetPace > 0) {
-            await _bridge.setSpeed(targetPace * 3.6);
+          // Only auto-drive the belt from a real workout-step target (low/high
+          // are sent only then). Falling back to targetPace==currentSpeed would
+          // feed noisy wrist speed back into the belt — a feedback loop — and
+          // every BLE speed write retriggers the treadmill's 3:00 countdown.
+          // Deadband so an unchanged target doesn't re-command every 5s.
+          final hasTarget = rawLow != null || rawHigh != null;
+          if (hasTarget && targetPace != null && targetPace > 0) {
+            final kmh = targetPace * 3.6;
+            if (_lastCommandedKmh == null ||
+                (kmh - _lastCommandedKmh!).abs() > 0.1) {
+              _lastCommandedKmh = kmh;
+              await _bridge.setSpeed(kmh);
+            }
           }
         }
         notifyListeners();
