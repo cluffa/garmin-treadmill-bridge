@@ -6,6 +6,7 @@ import Toybox.Communications;
 import Toybox.System;
 
 class DataFieldView extends WatchUi.DataField {
+    hidden var mBle as CtrlBleDelegate or Null;
     hidden var mConnectionStatus as String;
     hidden var mLastSendTime as Number;
     hidden var mLastMsgTime as Number;
@@ -13,8 +14,9 @@ class DataFieldView extends WatchUi.DataField {
     hidden var mTargetPaceStr as String; // formatted target from workout step
     hidden var mDebugStr as String;      // raw, unformatted currentWorkoutStep dump
 
-    function initialize() {
+    function initialize(ble as CtrlBleDelegate or Null) {
         DataField.initialize();
+        mBle = ble;
         mConnectionStatus = "Disconnected";
         mLastSendTime = 0;
         mLastMsgTime = 0;
