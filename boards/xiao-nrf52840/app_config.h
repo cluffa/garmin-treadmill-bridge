@@ -32,6 +32,21 @@
 #define NRF_SDH_CLOCK_LF_RC_TEMP_CTIV 0
 #define NRF_SDH_CLOCK_LF_ACCURACY 7   /* 20 ppm */
 
+/* ---- radio timeslot budget -------------------------------------------------
+ * Three concurrent radio roles share the schedule (S340 multiplexes by
+ * timeslot, ANT has priority windows):
+ *   ANT+ SDM master  : fixed 8134-count period (~4.03 Hz), ~150 µs bursts
+ *   BLE central      : treadmill link, 30-50 ms conn interval (below) —
+ *                      the iFit keepalive is one 20 B write-no-rsp per
+ *                      500 ms tick (bursts of ≤7 at phases 2/5), far under
+ *                      one packet per interval
+ *   BLE peripheral   : TMILL-CTRL advertising at 285 ms / one low-traffic
+ *                      connection (a 5 s-cadence 20 B write from the field)
+ * Bench gate (Task A6): belt speed change lands within one keepalive cycle
+ * while ANT keeps broadcasting and the field stays connected. If the iFit
+ * link starves, first lengthen the ctrl-svc conn interval, then shorten the
+ * treadmill conn interval toward 30 ms. */
+
 /* ---- BLE modules ---------------------------------------------------------- */
 #define NRF_BLE_GATT_ENABLED 1
 #define NRF_BLE_SCAN_ENABLED 1

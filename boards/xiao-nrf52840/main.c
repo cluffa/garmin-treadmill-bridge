@@ -31,7 +31,11 @@ APP_TIMER_DEF(m_heartbeat_timer);
 static void heartbeat_cb(void *ctx)
 {
     (void)ctx;
-    nrf_gpio_pin_toggle(LED_2 /* green */);
+    nrf_gpio_pin_toggle(LED_2 /* green: alive */);
+    /* Bench status at a glance (LEDs are active low):
+     * red = treadmill linked, blue = data field connected. */
+    nrf_gpio_pin_write(LED_1, platform_ble_central_connected() ? 0 : 1);
+    nrf_gpio_pin_write(LED_3, platform_ble_ctrl_svc_connected() ? 0 : 1);
 }
 
 static void on_treadmill_state(const treadmill_state_t *s)
