@@ -22,6 +22,7 @@
 
 #include "platform_ant_sdm.h"
 #include "platform_ble_central.h"
+#include "platform_ble_ctrl_svc.h"
 
 #define HEARTBEAT_MS 1000
 
@@ -98,6 +99,10 @@ int main(void)
     /* Forward path: treadmill frames → shared state → ANT+ SDM broadcast. */
     platform_ble_central_init(on_treadmill_state);
     platform_ble_central_start_scan();
+
+    /* Reverse path: data field writes "SPEED <kmh>" → ctrl_dispatch →
+     * machine_shim → treadmill (FTMS CP or iFit poll-phase injection). */
+    platform_ble_ctrl_svc_init();
 
     for (;;) {
         if (!NRF_LOG_PROCESS()) {

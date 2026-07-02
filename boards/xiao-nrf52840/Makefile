@@ -29,9 +29,12 @@ SRC_FILES += \
   $(PROJ_DIR)/platform_ant_sdm.c \
   $(PROJ_DIR)/platform_ble_central.c \
   $(PROJ_DIR)/ifit_poll.c \
+  $(PROJ_DIR)/platform_ble_ctrl_svc.c \
+  $(PROJ_DIR)/machine_shim.c \
   $(CORE_DIR)/ant_sdm_encode.c \
   $(CORE_DIR)/ftms_parse.c \
   $(CORE_DIR)/ifit_parse.c \
+  $(CORE_DIR)/ctrl_dispatch.c \
 
 # SDK: startup + system
 SRC_FILES += \
