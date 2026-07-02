@@ -28,8 +28,10 @@ SRC_FILES += \
   $(PROJ_DIR)/main.c \
   $(PROJ_DIR)/platform_ant_sdm.c \
   $(PROJ_DIR)/platform_ble_central.c \
+  $(PROJ_DIR)/ifit_poll.c \
   $(CORE_DIR)/ant_sdm_encode.c \
   $(CORE_DIR)/ftms_parse.c \
+  $(CORE_DIR)/ifit_parse.c \
 
 # SDK: startup + system
 SRC_FILES += \

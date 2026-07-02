@@ -1,7 +1,10 @@
 #include "platform_ble_central.h"
 #include "ftms_parse.h"
+#include "ifit_parse.h"
+#include "ifit_poll.h"
 
 #include "app_error.h"
+#include "app_timer.h"
 #include "ble.h"
 #include "ble_gap.h"
 #include "ble_gattc.h"
@@ -16,7 +19,25 @@
 #define TREADMILL_CHR   0x2ACD  /* Treadmill Data (notify) */
 #define FTMS_CP_CHR     0x2AD9  /* Fitness Machine Control Point (write) */
 
+#define IFIT_SVC_UUID   0x1533  /* on the vendor base below */
+#define IFIT_NOTIFY_CHR 0x1535
+#define IFIT_WRITE_CHR  0x1534
+
 #define CONN_CFG_TAG    1       /* must match nrf_sdh_ble_default_cfg_set */
+
+#define IFIT_TICK_MS    500     /* keepalive pace, same as the ESP32 build */
+#define IFIT_GAP_RESET_TICKS APP_TIMER_TICKS(30000) /* odometer reset gap */
+
+/* iFit vendor base 00000000-1412-efde-1523-785feabcd123, little-endian.
+ * Bytes 12-13 carry the 16-bit uuid (0x1533/34/35). */
+static const ble_uuid128_t IFIT_BASE = {{
+    0x23,0xd1,0xbc,0xea,0x5f,0x78,0x23,0x15,
+    0xde,0xef,0x12,0x14,0x00,0x00,0x00,0x00}};
+
+/* Raw 16-byte iFit service UUID (LE) for matching 128-bit advert lists. */
+static const uint8_t IFIT_SVC_RAW[16] = {
+    0x23,0xd1,0xbc,0xea,0x5f,0x78,0x23,0x15,
+    0xde,0xef,0x12,0x14,0x33,0x15,0x00,0x00};
 
 /* GATT discovery progresses one step per GATTC response event. */
 typedef enum {
@@ -29,27 +50,78 @@ typedef enum {
 } disc_stage_t;
 
 NRF_BLE_SCAN_DEF(m_scan);
+APP_TIMER_DEF(m_ifit_timer);
 
 static central_state_cb s_cb;
 static uint16_t         s_conn_handle = BLE_CONN_HANDLE_INVALID;
 static central_proto_t  s_proto = CENTRAL_PROTO_NONE;
+static central_proto_t  s_pending_proto = CENTRAL_PROTO_NONE; /* set at match */
+static uint8_t          s_ifit_uuid_type;   /* from sd_ble_uuid_vs_add */
 static disc_stage_t     s_stage = DISC_IDLE;
 static uint16_t         s_svc_end;       /* service end handle           */
-static uint16_t         s_data_handle;   /* Treadmill Data value handle  */
-static uint16_t         s_cp_handle;     /* Control Point value handle   */
-static uint16_t         s_cccd_handle;   /* Treadmill Data CCCD          */
-static uint16_t         s_chr_disc_next; /* next handle for chr disc     */
+static uint16_t         s_data_handle;   /* notify char value handle     */
+static uint16_t         s_cp_handle;     /* control/write value handle   */
+static uint16_t         s_cccd_handle;   /* notify char CCCD             */
 static bool             s_write_busy;    /* one WRITE_REQ in flight max  */
 
-/* ---- discovery steps ----------------------------------------------------- */
+/* iFit odometer: the frames carry no distance — integrate from speed. */
+static float            s_distance_m;
+static uint32_t         s_last_rx_ticks;
+static bool             s_have_rx;
+
+/* ---- advert parsing (ported from machine_ftms.c / machine_ifit.c) -------- */
+
+static bool adv_has_uuid16(const uint8_t *data, uint8_t data_len, uint16_t want)
+{
+    uint8_t i = 0;
+    while (i < data_len) {
+        uint8_t len = data[i];
+        if (len < 1 || (uint16_t)i + 1u + len > data_len) break;
+        uint8_t type = data[i + 1];
+        if (type == 0x02 || type == 0x03) {
+            for (uint8_t j = 2; (uint16_t)j + 1u < (uint16_t)1u + len; j += 2) {
+                uint16_t uuid = (uint16_t)(data[i + j]) |
+                                ((uint16_t)(data[i + j + 1]) << 8);
+                if (uuid == want) return true;
+            }
+        }
+        i += (uint8_t)(len + 1);
+    }
+    return false;
+}
+
+static bool adv_has_ifit(const uint8_t *data, uint8_t len)
+{
+    uint8_t i = 0;
+    while (i < len) {
+        uint8_t l = data[i];
+        if (l < 1 || (uint16_t)i + 1u + l > len) break;
+        uint8_t t = data[i + 1];
+        if (t == 0x06 || t == 0x07) {
+            for (uint8_t j = 2; j + 16 <= (uint16_t)l + 1; j += 16)
+                if (memcmp(&data[i + j], IFIT_SVC_RAW, 16) == 0) return true;
+        }
+        i += (uint8_t)(l + 1);
+    }
+    return false;
+}
+
+/* ---- discovery steps ------------------------------------------------------ */
 
 static void disc_start(void)
 {
-    ble_uuid_t ftms = { .uuid = FTMS_SVC_UUID, .type = BLE_UUID_TYPE_BLE };
+    ble_uuid_t svc;
+    if (s_proto == CENTRAL_PROTO_IFIT) {
+        svc.uuid = IFIT_SVC_UUID;
+        svc.type = s_ifit_uuid_type;
+    } else {
+        svc.uuid = FTMS_SVC_UUID;
+        svc.type = BLE_UUID_TYPE_BLE;
+    }
     s_stage = DISC_SVC;
     s_svc_end = s_data_handle = s_cp_handle = s_cccd_handle = 0;
     APP_ERROR_CHECK(sd_ble_gattc_primary_services_discover(s_conn_handle,
-                                                           0x0001, &ftms));
+                                                           0x0001, &svc));
 }
 
 static void disc_continue_chrs(uint16_t from)
@@ -60,21 +132,30 @@ static void disc_continue_chrs(uint16_t from)
     APP_ERROR_CHECK(sd_ble_gattc_characteristics_discover(s_conn_handle, &r));
 }
 
+static void disc_continue_descs(uint16_t from)
+{
+    ble_gattc_handle_range_t r = { .start_handle = from,
+                                   .end_handle = s_svc_end };
+    s_stage = DISC_DESC;
+    APP_ERROR_CHECK(sd_ble_gattc_descriptors_discover(s_conn_handle, &r));
+}
+
 static void disc_finish_chrs(void)
 {
     if (s_data_handle == 0) {
-        NRF_LOG_WARNING("central: Treadmill Data (0x%04X) not found",
-                        TREADMILL_CHR);
+        NRF_LOG_WARNING("central: notify characteristic not found");
         s_stage = DISC_IDLE;
         return;
     }
     if (s_cp_handle == 0) {
-        NRF_LOG_WARNING("central: FTMS Control Point missing — writes disabled");
+        NRF_LOG_WARNING("central: control characteristic missing — writes disabled");
     }
-    ble_gattc_handle_range_t r = { .start_handle = (uint16_t)(s_data_handle + 1),
-                                   .end_handle = s_svc_end };
-    s_stage = DISC_DESC;
-    APP_ERROR_CHECK(sd_ble_gattc_descriptors_discover(s_conn_handle, &r));
+    if (s_data_handle >= s_svc_end) {
+        NRF_LOG_WARNING("central: no room for CCCD after notify char");
+        s_stage = DISC_IDLE;
+        return;
+    }
+    disc_continue_descs((uint16_t)(s_data_handle + 1));
 }
 
 static void cccd_subscribe(void)
@@ -91,21 +172,65 @@ static void cccd_subscribe(void)
     APP_ERROR_CHECK(sd_ble_gattc_write(s_conn_handle, &w));
 }
 
-/* ---- GATTC event handling ------------------------------------------------ */
+/* ---- iFit keepalive pump --------------------------------------------------- */
+
+/* ifit_poll_tick emits 1..7 frames per tick as fire-and-forget WRITE_CMDs.
+ * The SoftDevice queues several; on exhaustion we log and drop, matching the
+ * ESP32 build's best-effort write_no_rsp behavior. */
+static void ifit_frame_write(const uint8_t *frame, size_t len, void *ctx)
+{
+    (void)ctx;
+    if (s_cp_handle == 0 || s_conn_handle == BLE_CONN_HANDLE_INVALID) return;
+    ble_gattc_write_params_t w = {
+        .write_op = BLE_GATT_OP_WRITE_CMD,
+        .handle   = s_cp_handle,
+        .offset   = 0,
+        .len      = (uint16_t)len,
+        .p_value  = frame,
+    };
+    uint32_t err = sd_ble_gattc_write(s_conn_handle, &w);
+    if (err != NRF_SUCCESS) {
+        NRF_LOG_WARNING("central: ifit frame dropped (err %u)", err);
+    }
+}
+
+static void ifit_timer_cb(void *ctx)
+{
+    (void)ctx;
+    if (s_proto == CENTRAL_PROTO_IFIT && s_stage == DISC_DONE) {
+        ifit_poll_tick(ifit_frame_write, NULL);
+    }
+}
+
+static void subscribed(void)
+{
+    s_stage = DISC_DONE;
+    NRF_LOG_INFO("central: subscribed — notifications active");
+    if (s_proto == CENTRAL_PROTO_IFIT) {
+        ifit_poll_reset();
+        s_distance_m = 0;
+        s_have_rx = false;
+        APP_ERROR_CHECK(app_timer_start(m_ifit_timer,
+                                        APP_TIMER_TICKS(IFIT_TICK_MS), NULL));
+        NRF_LOG_INFO("central: iFit init+keepalive started");
+    }
+}
+
+/* ---- GATTC event handling -------------------------------------------------- */
 
 static void on_svc_disc_rsp(const ble_gattc_evt_t *e)
 {
     if (s_stage != DISC_SVC) return;
     if (e->gatt_status != BLE_GATT_STATUS_SUCCESS ||
         e->params.prim_srvc_disc_rsp.count == 0) {
-        NRF_LOG_WARNING("central: FTMS service not found (status 0x%04X)",
+        NRF_LOG_WARNING("central: service not found (status 0x%04X)",
                         e->gatt_status);
         s_stage = DISC_IDLE;
         return;
     }
     const ble_gattc_service_t *svc = &e->params.prim_srvc_disc_rsp.services[0];
     s_svc_end = svc->handle_range.end_handle;
-    NRF_LOG_INFO("central: FTMS service handles %u-%u",
+    NRF_LOG_INFO("central: service handles %u-%u",
                  svc->handle_range.start_handle, s_svc_end);
     disc_continue_chrs(svc->handle_range.start_handle);
 }
@@ -118,18 +243,23 @@ static void on_chr_disc_rsp(const ble_gattc_evt_t *e)
         disc_finish_chrs();     /* range exhausted */
         return;
     }
+    uint16_t notify_uuid = (s_proto == CENTRAL_PROTO_IFIT) ? IFIT_NOTIFY_CHR
+                                                           : TREADMILL_CHR;
+    uint16_t write_uuid  = (s_proto == CENTRAL_PROTO_IFIT) ? IFIT_WRITE_CHR
+                                                           : FTMS_CP_CHR;
+    uint8_t  uuid_type   = (s_proto == CENTRAL_PROTO_IFIT) ? s_ifit_uuid_type
+                                                           : BLE_UUID_TYPE_BLE;
     uint16_t last = 0;
     for (uint16_t i = 0; i < e->params.char_disc_rsp.count; i++) {
         const ble_gattc_char_t *c = &e->params.char_disc_rsp.chars[i];
         last = c->handle_value;
-        if (c->uuid.type == BLE_UUID_TYPE_BLE) {
-            if (c->uuid.uuid == TREADMILL_CHR) {
-                s_data_handle = c->handle_value;
-                NRF_LOG_INFO("central: Treadmill Data @%u", s_data_handle);
-            } else if (c->uuid.uuid == FTMS_CP_CHR) {
-                s_cp_handle = c->handle_value;
-                NRF_LOG_INFO("central: FTMS Control Point @%u", s_cp_handle);
-            }
+        if (c->uuid.type != uuid_type) continue;
+        if (c->uuid.uuid == notify_uuid) {
+            s_data_handle = c->handle_value;
+            NRF_LOG_INFO("central: notify char @%u", s_data_handle);
+        } else if (c->uuid.uuid == write_uuid) {
+            s_cp_handle = c->handle_value;
+            NRF_LOG_INFO("central: control char @%u", s_cp_handle);
         }
     }
     if (last >= s_svc_end) {
@@ -142,9 +272,11 @@ static void on_chr_disc_rsp(const ble_gattc_evt_t *e)
 static void on_desc_disc_rsp(const ble_gattc_evt_t *e)
 {
     if (s_stage != DISC_DESC) return;
+    uint16_t last = 0;
     if (e->gatt_status == BLE_GATT_STATUS_SUCCESS) {
         for (uint16_t i = 0; i < e->params.desc_disc_rsp.count; i++) {
             const ble_gattc_desc_t *d = &e->params.desc_disc_rsp.descs[i];
+            last = d->handle;
             if (d->uuid.type == BLE_UUID_TYPE_BLE &&
                 d->uuid.uuid == BLE_UUID_DESCRIPTOR_CLIENT_CHAR_CONFIG) {
                 s_cccd_handle = d->handle;
@@ -152,6 +284,10 @@ static void on_desc_disc_rsp(const ble_gattc_evt_t *e)
                 cccd_subscribe();
                 return;
             }
+        }
+        if (last != 0 && last < s_svc_end) {
+            disc_continue_descs((uint16_t)(last + 1));   /* next batch */
+            return;
         }
     }
     NRF_LOG_WARNING("central: CCCD not found — no notifications");
@@ -162,8 +298,7 @@ static void on_write_rsp(const ble_gattc_evt_t *e)
 {
     if (s_stage == DISC_CCCD_WR &&
         e->params.write_rsp.handle == s_cccd_handle) {
-        s_stage = DISC_DONE;
-        NRF_LOG_INFO("central: subscribed — notifications active");
+        subscribed();
         return;
     }
     s_write_busy = false;
@@ -172,11 +307,47 @@ static void on_write_rsp(const ble_gattc_evt_t *e)
     }
 }
 
+static void on_hvx_ifit(const ble_gattc_evt_hvx_t *h)
+{
+    float speed_mps, incline_pct;
+    if (!ifit_parse_data(h->data, h->len, &speed_mps, &incline_pct)) return;
+
+    /* Integrate distance from speed (frames carry none); >30 s gap means the
+     * treadmill restarted while BLE stayed up — reset the odometer. */
+    uint32_t now = app_timer_cnt_get();
+    if (s_have_rx) {
+        uint32_t gap = app_timer_cnt_diff_compute(now, s_last_rx_ticks);
+        if (gap > IFIT_GAP_RESET_TICKS) {
+            s_distance_m = 0;
+            NRF_LOG_INFO("central: rx gap — distance reset");
+        } else {
+            s_distance_m += speed_mps *
+                ((float)gap / (float)APP_TIMER_TICKS(1000));
+        }
+    }
+    s_last_rx_ticks = now;
+    s_have_rx = true;
+
+    ifit_poll_note_speed(speed_mps * 3.6f);
+
+    treadmill_state_t st = {
+        .speed_mps = speed_mps,
+        .distance_m = s_distance_m,
+        .incline_pct = incline_pct,
+        .elapsed_s = 0,
+    };
+    if (s_cb) s_cb(&st);
+}
+
 static void on_hvx(const ble_gattc_evt_t *e)
 {
     const ble_gattc_evt_hvx_t *h = &e->params.hvx;
     if (h->handle != s_data_handle) return;
 
+    if (s_proto == CENTRAL_PROTO_IFIT) {
+        on_hvx_ifit(h);
+        return;
+    }
     treadmill_state_t st;
     if (ftms_parse_treadmill_data(h->data, h->len, &st)) {
         if (s_cb) s_cb(&st);
@@ -185,7 +356,7 @@ static void on_hvx(const ble_gattc_evt_t *e)
     }
 }
 
-/* ---- GAP + dispatch ------------------------------------------------------ */
+/* ---- GAP + dispatch --------------------------------------------------------- */
 
 static void ble_evt_handler(const ble_evt_t *p_evt, void *p_ctx)
 {
@@ -195,10 +366,23 @@ static void ble_evt_handler(const ble_evt_t *p_evt, void *p_ctx)
     switch (p_evt->header.evt_id) {
     case BLE_GAP_EVT_CONNECTED:
         if (gap->params.connected.role != BLE_GAP_ROLE_CENTRAL) break;
+        /* One machine connection at a time — the single central link slot
+         * (NRF_SDH_BLE_CENTRAL_LINK_COUNT=1) enforces the ESP32 invariant
+         * structurally; this guard just makes a violation loud. */
+        if (s_conn_handle != BLE_CONN_HANDLE_INVALID) {
+            NRF_LOG_ERROR("central: INVARIANT VIOLATION — second machine link");
+            (void)sd_ble_gap_disconnect(gap->conn_handle,
+                     BLE_HCI_REMOTE_USER_TERMINATED_CONNECTION);
+            break;
+        }
         s_conn_handle = gap->conn_handle;
-        s_proto = CENTRAL_PROTO_FTMS;
+        s_proto = (s_pending_proto != CENTRAL_PROTO_NONE) ? s_pending_proto
+                                                          : CENTRAL_PROTO_FTMS;
+        s_pending_proto = CENTRAL_PROTO_NONE;
         s_write_busy = false;
-        NRF_LOG_INFO("central: connected FTMS (handle %u)", s_conn_handle);
+        NRF_LOG_INFO("central: connected %s (handle %u)",
+                     s_proto == CENTRAL_PROTO_IFIT ? "iFit" : "FTMS",
+                     s_conn_handle);
         disc_start();
         break;
 
@@ -206,6 +390,7 @@ static void ble_evt_handler(const ble_evt_t *p_evt, void *p_ctx)
         if (gap->conn_handle != s_conn_handle) break;
         NRF_LOG_INFO("central: disconnected (reason 0x%02X) — rescanning",
                      gap->params.disconnected.reason);
+        (void)app_timer_stop(m_ifit_timer);
         s_conn_handle = BLE_CONN_HANDLE_INVALID;
         s_proto = CENTRAL_PROTO_NONE;
         s_stage = DISC_IDLE;
@@ -249,6 +434,16 @@ NRF_SDH_BLE_OBSERVER(m_central_obs, 3 /* prio */, ble_evt_handler, NULL);
 static void scan_evt_handler(const scan_evt_t *p_evt)
 {
     switch (p_evt->scan_evt_id) {
+    case NRF_BLE_SCAN_EVT_FILTER_MATCH: {
+        /* Classify the matched advert so CONNECTED knows the protocol. */
+        const ble_gap_evt_adv_report_t *r = p_evt->params.filter_match.p_adv_report;
+        if (adv_has_uuid16(r->data.p_data, (uint8_t)r->data.len, FTMS_SVC_UUID)) {
+            s_pending_proto = CENTRAL_PROTO_FTMS;
+        } else if (adv_has_ifit(r->data.p_data, (uint8_t)r->data.len)) {
+            s_pending_proto = CENTRAL_PROTO_IFIT;
+        }
+        break;
+    }
     case NRF_BLE_SCAN_EVT_CONNECTING_ERROR:
         NRF_LOG_WARNING("central: connect request failed (%u) — rescanning",
                         p_evt->params.connecting_err.err_code);
@@ -259,11 +454,16 @@ static void scan_evt_handler(const scan_evt_t *p_evt)
     }
 }
 
-/* ---- public API ----------------------------------------------------------- */
+/* ---- public API --------------------------------------------------------------- */
 
 void platform_ble_central_init(central_state_cb cb)
 {
     s_cb = cb;
+
+    APP_ERROR_CHECK(sd_ble_uuid_vs_add(&IFIT_BASE, &s_ifit_uuid_type));
+
+    APP_ERROR_CHECK(app_timer_create(&m_ifit_timer, APP_TIMER_MODE_REPEATED,
+                                     ifit_timer_cb));
 
     nrf_ble_scan_init_t init = {
         .connect_if_match = true,
@@ -274,7 +474,9 @@ void platform_ble_central_init(central_state_cb cb)
     APP_ERROR_CHECK(nrf_ble_scan_init(&m_scan, &init, scan_evt_handler));
 
     ble_uuid_t ftms = { .uuid = FTMS_SVC_UUID, .type = BLE_UUID_TYPE_BLE };
+    ble_uuid_t ifit = { .uuid = IFIT_SVC_UUID, .type = s_ifit_uuid_type };
     APP_ERROR_CHECK(nrf_ble_scan_filter_set(&m_scan, SCAN_UUID_FILTER, &ftms));
+    APP_ERROR_CHECK(nrf_ble_scan_filter_set(&m_scan, SCAN_UUID_FILTER, &ifit));
     APP_ERROR_CHECK(nrf_ble_scan_filters_enable(&m_scan,
                                                 NRF_BLE_SCAN_UUID_FILTER,
                                                 false));
@@ -296,7 +498,7 @@ central_proto_t platform_ble_central_proto(void)
     return platform_ble_central_connected() ? s_proto : CENTRAL_PROTO_NONE;
 }
 
-/* ---- FTMS Control Point writes -------------------------------------------- */
+/* ---- treadmill control ---------------------------------------------------------- */
 
 #define FTMS_OP_SET_SPEED    0x02   /* uint16, 0.01 km/h */
 #define FTMS_OP_SET_INCLINE  0x03   /* int16,  0.1 %     */
@@ -332,6 +534,11 @@ static bool cp_write(uint8_t opcode, const uint8_t *param, uint8_t param_len)
 
 bool platform_ble_central_set_speed(float kmh)
 {
+    if (s_proto == CENTRAL_PROTO_IFIT) {
+        if (!platform_ble_central_connected() || kmh < 0) return false;
+        ifit_poll_request_speed(kmh);
+        return true;
+    }
     /* Clamp before the cast — same rules as machine_ftms.c. */
     if (kmh < 0) kmh = 0;
     if (kmh > 25) kmh = 25;
@@ -342,6 +549,11 @@ bool platform_ble_central_set_speed(float kmh)
 
 bool platform_ble_central_set_incline(float pct)
 {
+    if (s_proto == CENTRAL_PROTO_IFIT) {
+        if (!platform_ble_central_connected()) return false;
+        ifit_poll_request_incline(pct);
+        return true;
+    }
     if (pct < -10) pct = -10;
     if (pct > 25) pct = 25;
     int16_t val = (int16_t)(pct * 10.0f);
@@ -352,5 +564,10 @@ bool platform_ble_central_set_incline(float pct)
 
 bool platform_ble_central_stop(void)
 {
+    if (s_proto == CENTRAL_PROTO_IFIT) {
+        if (!platform_ble_central_connected()) return false;
+        ifit_poll_request_stop();
+        return true;
+    }
     return cp_write(FTMS_OP_STOP, NULL, 0);
 }
