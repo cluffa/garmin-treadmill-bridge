@@ -26,6 +26,8 @@ $(OUTPUT_DIRECTORY)/nrf52840_xxaa.out: LINKER_SCRIPT := xiao_nrf52840_s340.ld
 # Project + shared bridge_core sources
 SRC_FILES += \
   $(PROJ_DIR)/main.c \
+  $(PROJ_DIR)/platform_ant_sdm.c \
+  $(CORE_DIR)/ant_sdm_encode.c \
 
 # SDK: startup + system
 SRC_FILES += \

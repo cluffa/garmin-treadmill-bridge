@@ -17,6 +17,10 @@
 #include "nrf_log_default_backends.h"
 #include "nrf_pwr_mgmt.h"
 #include "nrf_sdh.h"
+#include "nrf_sdh_ant.h"
+#include "nrf_sdh_ble.h"
+
+#include "platform_ant_sdm.h"
 
 #define HEARTBEAT_MS 1000
 
@@ -38,6 +42,15 @@ static void softdevice_init(void)
 {
     APP_ERROR_CHECK(nrf_sdh_enable_request());
     ASSERT(nrf_sdh_is_enabled());
+
+    /* BLE: apply the connection-count config and hand the SoftDevice its RAM
+     * base. On a RAM mismatch the call logs the required app RAM start over
+     * RTT — copy it into xiao_nrf52840_s340.ld and rebuild. */
+    uint32_t ram_start = 0;
+    APP_ERROR_CHECK(nrf_sdh_ble_default_cfg_set(1 /* conn_cfg_tag */,
+                                                &ram_start));
+    APP_ERROR_CHECK(nrf_sdh_ble_enable(&ram_start));
+    APP_ERROR_CHECK(nrf_sdh_ant_enable());
 }
 
 static void timers_init(void)
@@ -70,6 +83,16 @@ int main(void)
     APP_ERROR_CHECK(nrf_pwr_mgmt_init());
 
     NRF_LOG_INFO("xiao-nrf52840 up, S340 present");
+
+    platform_ant_sdm_init();
+
+    /* Task A2 bench state: fixed 2.5 m/s so a watch/ANT sniffer can verify
+     * the footpod broadcast before the treadmill link exists. Replaced by
+     * the BLE-central state callback in Task A3. */
+    treadmill_state_t test_state = {
+        .speed_mps = 2.5f, .distance_m = 0, .incline_pct = 0, .elapsed_s = 0,
+    };
+    platform_ant_sdm_set_state(&test_state);
 
     for (;;) {
         if (!NRF_LOG_PROCESS()) {
