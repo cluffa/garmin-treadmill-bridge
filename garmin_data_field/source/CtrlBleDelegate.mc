@@ -130,4 +130,43 @@ class CtrlBleDelegate extends BluetoothLowEnergy.BleDelegate {
     function isScanning() as Boolean {
         return mScanning;
     }
+
+    hidden function strToBytes(s as String) as ByteArray {
+        var chars = s.toUtf8Array();
+        var ba = new [chars.size()]b;
+        for (var i = 0; i < chars.size(); i++) {
+            ba[i] = chars[i];
+        }
+        return ba;
+    }
+
+    // Write "SPEED <kmh>" (uppercase — the bridge's ctrl_dispatch grammar).
+    // One write in flight at a time; drops the request if the previous write
+    // hasn't completed (the caller retries on its 5 s cadence anyway).
+    function writeSpeedKmh(kmh as Float) as Boolean {
+        if (mDevice == null || mWritePending) { return false; }
+        var svc = mDevice.getService(CTRL_SVC_UUID);
+        if (svc == null) { return false; }
+        var ch = svc.getCharacteristic(CTRL_CHR_UUID);
+        if (ch == null) { return false; }
+        var cmd = "SPEED " + kmh.format("%.1f");
+        try {
+            ch.requestWrite(strToBytes(cmd),
+                            {:writeType => BluetoothLowEnergy.WRITE_TYPE_DEFAULT});
+            mWritePending = true;
+            System.println("BLE tx: " + cmd);
+            return true;
+        } catch (e) {
+            System.println("BLE write failed: " + e.getErrorMessage());
+            return false;
+        }
+    }
+
+    function onCharacteristicWrite(characteristic as BluetoothLowEnergy.Characteristic,
+                                   status as BluetoothLowEnergy.Status) as Void {
+        mWritePending = false;
+        if (status != BluetoothLowEnergy.STATUS_SUCCESS) {
+            System.println("BLE write status=" + status);
+        }
+    }
 }

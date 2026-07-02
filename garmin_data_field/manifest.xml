@@ -8,8 +8,6 @@
             <iq:product id="fr970"/>
         </iq:products>
         <iq:permissions>
-            <!-- Communications goes away with the phone path in Task B3 -->
-            <iq:uses-permission id="Communications"/>
             <iq:uses-permission id="BluetoothLowEnergy"/>
         </iq:permissions>
         <iq:languages>
