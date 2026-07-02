@@ -39,9 +39,47 @@ source ~/esp/esp-idf/export.sh
 |-------|-----|--------|
 | Heltec WiFi LoRa 32 v3 | `boards/heltec-v3` | **`esp32s3`** |
 | Seeed XIAO ESP32-C6 | `boards/xiao-c6` | `esp32c6` |
+| Seeed XIAO nRF52840 | `boards/xiao-nrf52840` | nRF52840 + **S340** (not ESP-IDF — see below) |
 
 If a `boards/*/build` dir has a stale target, `battery.c` fails to compile
 (`adc_cali_create_scheme_curve_fitting` is S3-only). Fix: `idf.py set-target esp32s3`.
+
+## xiao-nrf52840 (ANT+ bridge — different toolchain)
+
+This board removes the phone from the loop: BLE central → treadmill, **ANT+
+SDM footpod** → watch (native sensor, no BLE slot), BLE peripheral
+`TMILL-CTRL` ← data field target-pace writes. Design/plan:
+`docs/superpowers/specs/2026-07-01-nrf52840-ant-bridge-design.md`.
+
+Builds with **nRF5 SDK v17.1.0 + S340 SoftDevice v7.0.1**, NOT ESP-IDF/build.sh:
+
+```sh
+# prerequisites: arm-none-eabi-gcc, nrfjprog, nRF5 SDK, S340 (from thisisant.com)
+make -C boards/xiao-nrf52840 SDK_ROOT=~/nRF5_SDK_17.1.0_ddde560 \
+     S340_API=~/s340/API/include
+make -C boards/xiao-nrf52840 flash_softdevice   # once
+make -C boards/xiao-nrf52840 flash              # app, over SWD (J-Link on back pads)
+```
+
+Gotchas:
+- **S340 is NOT in the nRF5 SDK** — it's licensed via thisisant.com (free
+  registration). Same for the **ANT+ network key**: copy
+  `ant_network_key.h.example` → `ant_network_key.h` (git-ignored) and fill it
+  in, or the build fails at the `#include`.
+- `sdk_config.h` is the unmodified SDK template from
+  `examples/multiprotocol/ble_ant_app_hrm/pca10056/s340/config/`; all project
+  overrides live in `app_config.h` (`USE_APP_CONFIG`). Copy the template in on
+  first build.
+- First build: verify FLASH origin (S340 APP_CODE_BASE) and RAM origin in
+  `xiao_nrf52840_s340.ld` — mismatch logs the required RAM start over RTT.
+- Flashing needs SWD (the XIAO's UF2 bootloader can't write the SoftDevice
+  region reliably); logs are SEGGER RTT, not UART.
+- **`components/bridge_core/` must stay platform-agnostic** — no SoftDevice/
+  nRF includes there. nRF glue lives in `boards/xiao-nrf52840/` only
+  (`ifit_poll.c` there is the extracted, host-tested iFit FSM; frames verbatim
+  from `machine_ifit.c`).
+- Control writes from the data field use the **uppercase** `ctrl_dispatch`
+  grammar (`SPEED 8.0`, `STOP`), service UUID `A6ED0001-…`, char `A6ED0002-…`.
 
 ## Tools
 
