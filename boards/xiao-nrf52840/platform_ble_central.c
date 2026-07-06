@@ -1,7 +1,9 @@
 #include "platform_ble_central.h"
+#include "connect_policy.h"
 #include "ftms_parse.h"
 #include "ifit_parse.h"
 #include "ifit_poll.h"
+#include "last_device.h"
 
 #include "app_error.h"
 #include "app_timer.h"
@@ -51,12 +53,23 @@ typedef enum {
 
 NRF_BLE_SCAN_DEF(m_scan);
 APP_TIMER_DEF(m_ifit_timer);
+APP_TIMER_DEF(m_policy_timer);  /* 1 Hz connect_policy tick while scanning */
 
 static central_state_cb s_cb;
 static uint16_t         s_conn_handle = BLE_CONN_HANDLE_INVALID;
 static central_proto_t  s_proto = CENTRAL_PROTO_NONE;
-static central_proto_t  s_pending_proto = CENTRAL_PROTO_NONE; /* set at match */
 static uint8_t          s_ifit_uuid_type;   /* from sd_ble_uuid_vs_add */
+
+/* Scan list + auto-connect policy state. */
+static ftms_device_t    s_devs[FTMS_MAX_DEVICES];
+static int              s_ndev;
+static ftms_device_t    s_saved;         /* persisted last-connected      */
+static bool             s_have_saved;
+static ftms_device_t    s_target;        /* device being connected / live */
+static bool             s_connecting;
+static ftms_device_t    s_manual;        /* watch-requested override      */
+static bool             s_have_manual;
+static uint32_t         s_scan_start_ticks;
 static disc_stage_t     s_stage = DISC_IDLE;
 static uint16_t         s_svc_end;       /* service end handle           */
 static uint16_t         s_data_handle;   /* notify char value handle     */
@@ -104,6 +117,26 @@ static bool adv_has_ifit(const uint8_t *data, uint8_t len)
         i += (uint8_t)(l + 1);
     }
     return false;
+}
+
+/* Complete/shortened local name (types 0x09/0x08), ported from machine.c. */
+static void adv_name(const uint8_t *data, uint8_t len, char *out, int outlen)
+{
+    out[0] = '\0';
+    uint8_t i = 0;
+    while (i < len) {
+        uint8_t l = data[i];
+        if (l < 1 || (uint16_t)i + 1u + l > len) break;
+        uint8_t t = data[i + 1];
+        if (t == 0x08 || t == 0x09) {
+            int nl = l - 1;
+            if (nl > outlen - 1) nl = outlen - 1;
+            memcpy(out, &data[i + 2], nl);
+            out[nl] = '\0';
+            return;
+        }
+        i += (uint8_t)(l + 1);
+    }
 }
 
 /* ---- discovery steps ------------------------------------------------------ */
@@ -356,6 +389,121 @@ static void on_hvx(const ble_gattc_evt_t *e)
     }
 }
 
+/* ---- device list + connect policy ------------------------------------------- */
+
+static uint32_t ms_since_scan_start(void)
+{
+    uint32_t diff = app_timer_cnt_diff_compute(app_timer_cnt_get(),
+                                               s_scan_start_ticks);
+    /* 32768 ticks/s → ms; 32-bit safe for the < 9 min the RTC can span. */
+    return (uint32_t)(((uint64_t)diff * 1000u) / APP_TIMER_TICKS(1000));
+}
+
+static void connect_to(const ftms_device_t *dev)
+{
+    nrf_ble_scan_stop();
+    (void)app_timer_stop(m_policy_timer);
+
+    s_target = *dev;
+    s_connecting = true;
+
+    ble_gap_addr_t addr;
+    memset(&addr, 0, sizeof addr);
+    addr.addr_type = dev->addr_type;
+    memcpy(addr.addr, dev->addr, 6);
+
+    static const ble_gap_scan_params_t scan_params = {
+        .active        = 0,
+        .interval      = NRF_BLE_SCAN_SCAN_INTERVAL,
+        .window        = NRF_BLE_SCAN_SCAN_WINDOW,
+        .timeout       = 500,   /* 5 s to acquire, else GAP_TIMEOUT_SRC_CONN */
+        .scan_phys     = BLE_GAP_PHY_1MBPS,
+        .filter_policy = BLE_GAP_SCAN_FP_ACCEPT_ALL,
+    };
+    static const ble_gap_conn_params_t conn_params = {
+        .min_conn_interval = NRF_BLE_SCAN_MIN_CONNECTION_INTERVAL,
+        .max_conn_interval = NRF_BLE_SCAN_MAX_CONNECTION_INTERVAL,
+        .slave_latency     = NRF_BLE_SCAN_SLAVE_LATENCY,
+        .conn_sup_timeout  = NRF_BLE_SCAN_SUPERVISION_TIMEOUT,
+    };
+
+    uint32_t err = sd_ble_gap_connect(&addr, &scan_params, &conn_params,
+                                      CONN_CFG_TAG);
+    if (err != NRF_SUCCESS) {
+        NRF_LOG_WARNING("central: connect req err 0x%x — rescanning", err);
+        s_connecting = false;
+        platform_ble_central_start_scan();
+        return;
+    }
+    NRF_LOG_INFO("central: connecting to \"%s\" (%s)",
+                 nrf_log_push((char *)s_target.name),
+                 s_target.proto == MACHINE_PROTO_IFIT ? "iFit" : "FTMS");
+}
+
+/* Evaluate the auto-connect policy; runs on every advert and each policy
+ * tick. Never fires while connected/connecting or a manual pick is staged. */
+static void policy_evaluate(void)
+{
+    if (s_conn_handle != BLE_CONN_HANDLE_INVALID || s_connecting ||
+        s_have_manual) {
+        return;
+    }
+    int pick = connect_policy_choose(s_devs, s_ndev,
+                                     s_have_saved ? &s_saved : NULL,
+                                     ms_since_scan_start());
+    if (pick >= 0) {
+        connect_to(&s_devs[pick]);
+    }
+}
+
+static void policy_timer_cb(void *ctx)
+{
+    (void)ctx;
+    policy_evaluate();
+}
+
+static void on_adv_report(const ble_gap_evt_adv_report_t *r)
+{
+    char name[FTMS_NAME_LEN];
+    adv_name(r->data.p_data, (uint8_t)r->data.len, name, FTMS_NAME_LEN);
+
+    int proto = -1;
+    if (adv_has_ifit(r->data.p_data, (uint8_t)r->data.len)) {
+        proto = MACHINE_PROTO_IFIT;
+    } else if (adv_has_uuid16(r->data.p_data, (uint8_t)r->data.len,
+                              FTMS_SVC_UUID)) {
+        proto = MACHINE_PROTO_FTMS;
+    }
+
+    if (proto >= 0) {
+        ftms_device_t dev;
+        memset(&dev, 0, sizeof dev);
+        dev.addr_type = r->peer_addr.addr_type;
+        memcpy(dev.addr, r->peer_addr.addr, 6);
+        dev.rssi = r->rssi;
+        dev.proto = (uint8_t)proto;
+        memcpy(dev.name, name, FTMS_NAME_LEN);
+        int before = s_ndev;
+        s_ndev = ftms_devlist_upsert(s_devs, s_ndev, &dev);
+        if (s_ndev != before) {
+            NRF_LOG_INFO("central: found \"%s\" rssi %d (%s)",
+                         nrf_log_push(name), dev.rssi,
+                         proto == MACHINE_PROTO_IFIT ? "iFit" : "FTMS");
+        }
+    } else if (name[0]) {
+        /* Name-only scan response: refresh the name of a known device (the
+         * UUID often arrives only in the primary advert). */
+        for (int i = 0; i < s_ndev; i++) {
+            if (memcmp(s_devs[i].addr, r->peer_addr.addr, 6) == 0) {
+                memcpy(s_devs[i].name, name, FTMS_NAME_LEN);
+                break;
+            }
+        }
+    }
+
+    policy_evaluate();
+}
+
 /* ---- GAP + dispatch --------------------------------------------------------- */
 
 static void ble_evt_handler(const ble_evt_t *p_evt, void *p_ctx)
@@ -376,30 +524,42 @@ static void ble_evt_handler(const ble_evt_t *p_evt, void *p_ctx)
             break;
         }
         s_conn_handle = gap->conn_handle;
-        s_proto = (s_pending_proto != CENTRAL_PROTO_NONE) ? s_pending_proto
-                                                          : CENTRAL_PROTO_FTMS;
-        s_pending_proto = CENTRAL_PROTO_NONE;
+        s_connecting = false;
+        s_proto = (s_target.proto == MACHINE_PROTO_IFIT) ? CENTRAL_PROTO_IFIT
+                                                         : CENTRAL_PROTO_FTMS;
         s_write_busy = false;
-        NRF_LOG_INFO("central: connected %s (handle %u)",
+        NRF_LOG_INFO("central: connected \"%s\" (%s, handle %u)",
+                     nrf_log_push((char *)s_target.name),
                      s_proto == CENTRAL_PROTO_IFIT ? "iFit" : "FTMS",
                      s_conn_handle);
+        /* Remember for next power-up (skipped when unchanged). */
+        s_saved = s_target;
+        s_have_saved = true;
+        last_device_save(&s_target);
         disc_start();
         break;
 
     case BLE_GAP_EVT_DISCONNECTED:
         if (gap->conn_handle != s_conn_handle) break;
-        NRF_LOG_INFO("central: disconnected (reason 0x%02X) — rescanning",
+        NRF_LOG_INFO("central: disconnected (reason 0x%02X)",
                      gap->params.disconnected.reason);
         (void)app_timer_stop(m_ifit_timer);
         s_conn_handle = BLE_CONN_HANDLE_INVALID;
         s_proto = CENTRAL_PROTO_NONE;
         s_stage = DISC_IDLE;
-        platform_ble_central_start_scan();
+        if (s_have_manual) {     /* watch-picked switch: connect right away */
+            s_have_manual = false;
+            connect_to(&s_manual);
+        } else {
+            platform_ble_central_start_scan();
+        }
         break;
 
     case BLE_GAP_EVT_TIMEOUT:
         if (gap->params.timeout.src == BLE_GAP_TIMEOUT_SRC_CONN) {
             NRF_LOG_WARNING("central: connect timed out — rescanning");
+            s_connecting = false;
+            s_have_manual = false;   /* picked device gone; policy resumes */
             platform_ble_central_start_scan();
         }
         break;
@@ -433,21 +593,14 @@ NRF_SDH_BLE_OBSERVER(m_central_obs, 3 /* prio */, ble_evt_handler, NULL);
 
 static void scan_evt_handler(const scan_evt_t *p_evt)
 {
+    /* No module filters are enabled, so every advert arrives as NOT_FOUND;
+     * classification (FTMS/iFit/name-refresh) happens in on_adv_report. */
     switch (p_evt->scan_evt_id) {
-    case NRF_BLE_SCAN_EVT_FILTER_MATCH: {
-        /* Classify the matched advert so CONNECTED knows the protocol. */
-        const ble_gap_evt_adv_report_t *r = p_evt->params.filter_match.p_adv_report;
-        if (adv_has_uuid16(r->data.p_data, (uint8_t)r->data.len, FTMS_SVC_UUID)) {
-            s_pending_proto = CENTRAL_PROTO_FTMS;
-        } else if (adv_has_ifit(r->data.p_data, (uint8_t)r->data.len)) {
-            s_pending_proto = CENTRAL_PROTO_IFIT;
-        }
+    case NRF_BLE_SCAN_EVT_NOT_FOUND:
+        on_adv_report(p_evt->params.p_not_found);
         break;
-    }
-    case NRF_BLE_SCAN_EVT_CONNECTING_ERROR:
-        NRF_LOG_WARNING("central: connect request failed (%u) — rescanning",
-                        p_evt->params.connecting_err.err_code);
-        platform_ble_central_start_scan();
+    case NRF_BLE_SCAN_EVT_FILTER_MATCH:
+        on_adv_report(p_evt->params.filter_match.p_adv_report);
         break;
     default:
         break;
@@ -460,31 +613,39 @@ void platform_ble_central_init(central_state_cb cb)
 {
     s_cb = cb;
 
+    s_have_saved = last_device_load(&s_saved);
+    if (s_have_saved) {
+        NRF_LOG_INFO("central: last device \"%s\"",
+                     nrf_log_push((char *)s_saved.name));
+    }
+
     APP_ERROR_CHECK(sd_ble_uuid_vs_add(&IFIT_BASE, &s_ifit_uuid_type));
 
     APP_ERROR_CHECK(app_timer_create(&m_ifit_timer, APP_TIMER_MODE_REPEATED,
                                      ifit_timer_cb));
+    APP_ERROR_CHECK(app_timer_create(&m_policy_timer, APP_TIMER_MODE_REPEATED,
+                                     policy_timer_cb));
 
     nrf_ble_scan_init_t init = {
-        .connect_if_match = true,
+        .connect_if_match = false,   /* connect_policy decides, not the scan */
         .conn_cfg_tag     = CONN_CFG_TAG,
         .p_scan_param     = NULL,   /* NRF_BLE_SCAN_* app_config values */
         .p_conn_param     = NULL,
     };
     APP_ERROR_CHECK(nrf_ble_scan_init(&m_scan, &init, scan_evt_handler));
-
-    ble_uuid_t ftms = { .uuid = FTMS_SVC_UUID, .type = BLE_UUID_TYPE_BLE };
-    ble_uuid_t ifit = { .uuid = IFIT_SVC_UUID, .type = s_ifit_uuid_type };
-    APP_ERROR_CHECK(nrf_ble_scan_filter_set(&m_scan, SCAN_UUID_FILTER, &ftms));
-    APP_ERROR_CHECK(nrf_ble_scan_filter_set(&m_scan, SCAN_UUID_FILTER, &ifit));
-    APP_ERROR_CHECK(nrf_ble_scan_filters_enable(&m_scan,
-                                                NRF_BLE_SCAN_UUID_FILTER,
-                                                false));
 }
 
 void platform_ble_central_start_scan(void)
 {
+    s_ndev = 0;
+    if (platform_ble_central_connected()) {
+        /* A connected treadmill stops advertising; seed it so the watch's
+         * picker still lists it (idx 0). */
+        s_ndev = ftms_devlist_upsert(s_devs, s_ndev, &s_target);
+    }
+    s_scan_start_ticks = app_timer_cnt_get();
     APP_ERROR_CHECK(nrf_ble_scan_start(&m_scan));
+    (void)app_timer_start(m_policy_timer, APP_TIMER_TICKS(1000), NULL);
     NRF_LOG_INFO("central: scanning for treadmills…");
 }
 
@@ -493,9 +654,48 @@ bool platform_ble_central_connected(void)
     return s_conn_handle != BLE_CONN_HANDLE_INVALID;
 }
 
+bool platform_ble_central_connecting(void)
+{
+    return s_connecting;
+}
+
 central_proto_t platform_ble_central_proto(void)
 {
     return platform_ble_central_connected() ? s_proto : CENTRAL_PROTO_NONE;
+}
+
+int platform_ble_central_get_devices(ftms_device_t *out, int max)
+{
+    int n = s_ndev < max ? s_ndev : max;
+    memcpy(out, s_devs, (size_t)n * sizeof *out);
+    return n;
+}
+
+void platform_ble_central_connect(const ftms_device_t *dev)
+{
+    s_manual = *dev;
+
+    if (s_conn_handle != BLE_CONN_HANDLE_INVALID) {
+        if (memcmp(s_target.addr, dev->addr, 6) == 0) return;  /* already on it */
+        /* Tear down first; DISCONNECTED sees s_have_manual and connects. */
+        s_have_manual = true;
+        (void)sd_ble_gap_disconnect(s_conn_handle,
+                                    BLE_HCI_REMOTE_USER_TERMINATED_CONNECTION);
+        return;
+    }
+    if (s_connecting) {
+        (void)sd_ble_gap_connect_cancel();
+        s_connecting = false;
+    } else {
+        nrf_ble_scan_stop();
+    }
+    s_have_manual = false;
+    connect_to(&s_manual);
+}
+
+const ftms_device_t *platform_ble_central_device(void)
+{
+    return platform_ble_central_connected() ? &s_target : NULL;
 }
 
 /* ---- treadmill control ---------------------------------------------------------- */

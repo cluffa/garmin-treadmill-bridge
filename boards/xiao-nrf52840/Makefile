@@ -31,10 +31,14 @@ SRC_FILES += \
   $(PROJ_DIR)/ifit_poll.c \
   $(PROJ_DIR)/platform_ble_ctrl_svc.c \
   $(PROJ_DIR)/machine_shim.c \
+  $(PROJ_DIR)/last_device.c \
   $(CORE_DIR)/ant_sdm_encode.c \
   $(CORE_DIR)/ftms_parse.c \
   $(CORE_DIR)/ifit_parse.c \
   $(CORE_DIR)/ctrl_dispatch.c \
+  $(CORE_DIR)/ftms_devlist.c \
+  $(CORE_DIR)/connect_policy.c \
+  $(CORE_DIR)/ctrl_frames.c \
 
 # SDK: startup + system
 SRC_FILES += \
@@ -74,6 +78,9 @@ SRC_FILES += \
   $(SDK_ROOT)/components/libraries/sortlist/nrf_sortlist.c \
   $(SDK_ROOT)/components/libraries/experimental_section_vars/nrf_section_iter.c \
   $(SDK_ROOT)/components/libraries/pwr_mgmt/nrf_pwr_mgmt.c \
+  $(SDK_ROOT)/components/libraries/fds/fds.c \
+  $(SDK_ROOT)/components/libraries/fstorage/nrf_fstorage.c \
+  $(SDK_ROOT)/components/libraries/fstorage/nrf_fstorage_sd.c \
   $(SDK_ROOT)/modules/nrfx/soc/nrfx_atomic.c \
   $(SDK_ROOT)/modules/nrfx/drivers/src/nrfx_clock.c \
   $(SDK_ROOT)/integration/nrfx/legacy/nrf_drv_clock.c \
@@ -113,6 +120,8 @@ INC_FOLDERS += \
   $(SDK_ROOT)/components/libraries/balloc \
   $(SDK_ROOT)/components/libraries/delay \
   $(SDK_ROOT)/components/libraries/experimental_section_vars \
+  $(SDK_ROOT)/components/libraries/fds \
+  $(SDK_ROOT)/components/libraries/fstorage \
   $(SDK_ROOT)/components/libraries/log \
   $(SDK_ROOT)/components/libraries/log/src \
   $(SDK_ROOT)/components/libraries/memobj \

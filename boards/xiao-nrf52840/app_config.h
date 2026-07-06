@@ -93,6 +93,20 @@
 #define CLOCK_CONFIG_STATE_OBSERVER_PRIO 0
 #define CLOCK_CONFIG_LOG_ENABLED 0
 
+/* ---- fds: last-connected treadmill persistence ----------------------------- */
+#define FDS_ENABLED 1
+#define FDS_VIRTUAL_PAGES 2
+#define FDS_VIRTUAL_PAGE_SIZE 1024
+#define FDS_BACKGROUND_GC 1
+#define FDS_OP_QUEUE_SIZE 4
+#define FDS_CRC_CHECK_ON_READ 0
+#define FDS_CRC_CHECK_ON_WRITE 0
+#define FDS_MAX_USERS 2
+#define NRF_FSTORAGE_ENABLED 1
+#define NRF_FSTORAGE_SD_QUEUE_SIZE 4
+#define NRF_FSTORAGE_SD_MAX_RETRIES 8
+#define NRF_FSTORAGE_SD_MAX_WRITE_SIZE 4096
+
 /* ---- libraries ------------------------------------------------------------ */
 #define APP_TIMER_ENABLED 1
 #define APP_TIMER_CONFIG_RTC_FREQUENCY 0     /* 32768 Hz */

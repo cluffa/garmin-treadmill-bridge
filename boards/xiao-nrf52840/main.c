@@ -20,6 +20,7 @@
 #include "nrf_sdh_ant.h"
 #include "nrf_sdh_ble.h"
 
+#include "last_device.h"
 #include "platform_ant_sdm.h"
 #include "platform_ble_central.h"
 #include "platform_ble_ctrl_svc.h"
@@ -33,9 +34,18 @@ static void heartbeat_cb(void *ctx)
     (void)ctx;
     nrf_gpio_pin_toggle(LED_2 /* green: alive */);
     /* Bench status at a glance (LEDs are active low):
-     * red = treadmill linked, blue = data field connected. */
-    nrf_gpio_pin_write(LED_1, platform_ble_central_connected() ? 0 : 1);
+     * red = treadmill linked, blue = watch connected. */
+    bool link = platform_ble_central_connected();
+    nrf_gpio_pin_write(LED_1, link ? 0 : 1);
     nrf_gpio_pin_write(LED_3, platform_ble_ctrl_svc_connected() ? 0 : 1);
+
+    /* Push the treadmill link state to a subscribed watch on change so the
+     * picker updates without polling. */
+    static bool last_link;
+    if (link != last_link) {
+        last_link = link;
+        platform_ble_ctrl_svc_notify_status();
+    }
 }
 
 static void on_treadmill_state(const treadmill_state_t *s)
@@ -100,12 +110,19 @@ int main(void)
 
     platform_ant_sdm_init();
 
-    /* Forward path: treadmill frames → shared state → ANT+ SDM broadcast. */
+    /* Last-connected treadmill store (fds) — must precede the central,
+     * which loads the record for its auto-connect policy. */
+    last_device_init();
+
+    /* Forward path: treadmill frames → shared state → ANT+ SDM broadcast.
+     * Auto-connect: last-connected on sight, else strongest RSSI after the
+     * pick window; the watch can override with CONNECT <n>. */
     platform_ble_central_init(on_treadmill_state);
     platform_ble_central_start_scan();
 
-    /* Reverse path: data field writes "SPEED <kmh>" → ctrl_dispatch →
-     * machine_shim → treadmill (FTMS CP or iFit poll-phase injection). */
+    /* Reverse path: watch writes "SPEED <kmh>" / "CONNECT <n>" →
+     * ctrl_dispatch → machine_shim → treadmill (FTMS CP or iFit
+     * poll-phase injection). */
     platform_ble_ctrl_svc_init();
 
     for (;;) {
