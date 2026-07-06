@@ -16,9 +16,12 @@ Project-specific notes that aren't obvious from the README or code.
 cd app && flutter run              # run on connected device
 cd app && flutter build apk        # release APK
 
-# Garmin Connect IQ data field (requires Connect IQ SDK + developer key)
+# Garmin Connect IQ apps (requires Connect IQ SDK + developer key)
 # CI uses blackshadev/garmin-connectiq-build-action; locally use monkeyc CLI:
 # monkeyc -f garmin_data_field/monkey.jungle -d fenix8solar51mm -o app.prg
+# monkeyc -f garmin_ctrl_app/monkey.jungle   -d fenix8solar51mm -o ctrl.prg
+# monkeyc lives in "~/Library/Application Support/Garmin/ConnectIQ/Sdks/<sdk>/bin";
+# key: ~/Documents/garmin_developer_key.der
 ```
 
 ## Building (local macOS quirk)
@@ -61,6 +64,16 @@ make -C boards/xiao-nrf52840 flash_softdevice   # once
 make -C boards/xiao-nrf52840 flash              # app, over SWD (J-Link on back pads)
 ```
 
+**On this machine** the working invocation (PlatformIO's ARM GCC; S340 in
+~/Downloads) is:
+
+```sh
+make -C boards/xiao-nrf52840 -j8 \
+  GNU_INSTALL_ROOT=$HOME/.platformio/packages/toolchain-gccarmnoneeabi/bin/ \
+  GNU_VERSION=7.2.1 \
+  S340_API=$HOME/Downloads/ANT_s340_nrf52_7.0.1/ANT_s340_nrf52_7.0.1.API/include
+```
+
 Gotchas:
 - **S340 is NOT in the nRF5 SDK** — it's licensed via thisisant.com (free
   registration). Same for the **ANT+ network key**: copy
@@ -78,8 +91,27 @@ Gotchas:
   nRF includes there. nRF glue lives in `boards/xiao-nrf52840/` only
   (`ifit_poll.c` there is the extracted, host-tested iFit FSM; frames verbatim
   from `machine_ifit.c`).
-- Control writes from the data field use the **uppercase** `ctrl_dispatch`
-  grammar (`SPEED 8.0`, `STOP`), service UUID `A6ED0001-…`, char `A6ED0002-…`.
+- Control writes from the watch use the **uppercase** `ctrl_dispatch`
+  grammar (`SPEED 8.0`, `SCAN`, `CONNECT 2`, `STOP`), service UUID
+  `A6ED0001-…`, control char `A6ED0002-…`, response char `A6ED0003-…`
+  (notify). `LIST`/`STATUS` answer on the response char in the compact
+  ≤20-byte `'D'/'E'/'S'` frames from `ctrl_frames.h` (Garmin CIQ's MTU is
+  pinned at 23 — a JSON line doesn't fit one notification); other commands'
+  JSON replies go to RTT only. An `'S'` frame is also pushed when the
+  treadmill link changes.
+- **Treadmill choice:** the firmware scans both protocols into a device
+  list and connects per `connect_policy.c` — the fds-persisted
+  last-connected device the moment it's seen, else the strongest-RSSI
+  device after a 6 s window (15 s hold-out when a saved device exists but
+  isn't visible yet). `garmin_ctrl_app/` (a CIQ device app, distinct from
+  the data field) lists the devices and overrides with `CONNECT <n>`; the
+  pick becomes the new saved device. Only one watch peripheral link exists
+  (`NRF_SDH_BLE_PERIPHERAL_LINK_COUNT=1`), so the picker app and the data
+  field can't both be connected — use the app outside activities.
+- The ANT license: the Makefile passes the **evaluation** `ANT_LICENSE_KEY`
+  (personal use). The ANT+ **network key** in `ant_network_key.h` is
+  separate — a zeroed placeholder builds but Garmin watches won't hear the
+  footpod; put the real thisisant.com key back after re-cloning.
 
 ## Tools
 

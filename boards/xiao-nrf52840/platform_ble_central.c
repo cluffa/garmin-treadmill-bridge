@@ -401,6 +401,7 @@ static uint32_t ms_since_scan_start(void)
 
 static void connect_to(const ftms_device_t *dev)
 {
+    if (s_connecting) return;   /* one connect attempt at a time */
     nrf_ble_scan_stop();
     (void)app_timer_stop(m_policy_timer);
 
@@ -500,8 +501,9 @@ static void on_adv_report(const ble_gap_evt_adv_report_t *r)
             }
         }
     }
-
-    policy_evaluate();
+    /* No policy call here: the 1 Hz timer is the single decision point, so
+     * connects are never raced from the SD-observer context (costs ≤1 s of
+     * latency on the saved-device fast path). */
 }
 
 /* ---- GAP + dispatch --------------------------------------------------------- */
@@ -637,6 +639,8 @@ void platform_ble_central_init(central_state_cb cb)
 
 void platform_ble_central_start_scan(void)
 {
+    if (s_connecting) return;   /* a connect attempt owns the radio */
+
     s_ndev = 0;
     if (platform_ble_central_connected()) {
         /* A connected treadmill stops advertising; seed it so the watch's
@@ -644,7 +648,13 @@ void platform_ble_central_start_scan(void)
         s_ndev = ftms_devlist_upsert(s_devs, s_ndev, &s_target);
     }
     s_scan_start_ticks = app_timer_cnt_get();
-    APP_ERROR_CHECK(nrf_ble_scan_start(&m_scan));
+    uint32_t err = nrf_ble_scan_start(&m_scan);
+    if (err != NRF_SUCCESS) {
+        /* Transient (e.g. right after a disconnect) — the policy timer's
+         * next tick has nothing to pick from, and the watch can re-SCAN. */
+        NRF_LOG_WARNING("central: scan start err 0x%x", err);
+        return;
+    }
     (void)app_timer_start(m_policy_timer, APP_TIMER_TICKS(1000), NULL);
     NRF_LOG_INFO("central: scanning for treadmills…");
 }
