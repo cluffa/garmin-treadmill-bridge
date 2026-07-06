@@ -1,5 +1,8 @@
 # ESP-IDF build artifacts
 build/
+# nRF5 SDK build artifacts + secret ANT+ network key (see ant_network_key.h.example)
+_build/
+boards/xiao-nrf52840/ant_network_key.h
 managed_components/
 sdkconfig
 sdkconfig.old
@@ -17,6 +20,7 @@ tools/mtp_send_to_folder
 
 # Garmin Connect IQ build output
 garmin_data_field/out/
+garmin_ctrl_app/out/
 
 # Python
 __pycache__/

@@ -2,39 +2,27 @@ import Toybox.Activity;
 import Toybox.Graphics;
 import Toybox.Lang;
 import Toybox.WatchUi;
-import Toybox.Communications;
 import Toybox.System;
 
+// Send-only data field: reads the structured workout's target pace and
+// writes it to the nRF52840 bridge over BLE ("SPEED <kmh>"). Actual
+// treadmill speed reaches the watch natively via the bridge's ANT+ footpod,
+// so this field displays only the target and the control-link state.
 class DataFieldView extends WatchUi.DataField {
-    hidden var mConnectionStatus as String;
+    hidden var mBle as CtrlBleDelegate or Null;
     hidden var mLastSendTime as Number;
-    hidden var mLastMsgTime as Number;
-    hidden var mSpeed as Float;          // treadmill speed from phone (km/h)
     hidden var mTargetPaceStr as String; // formatted target from workout step
-    hidden var mDebugStr as String;      // raw, unformatted currentWorkoutStep dump
+    hidden var mLastSentStr as String;   // last command sent to the bridge
 
-    function initialize() {
+    function initialize(ble as CtrlBleDelegate or Null) {
         DataField.initialize();
-        mConnectionStatus = "Disconnected";
+        mBle = ble;
         mLastSendTime = 0;
-        mLastMsgTime = 0;
-        mSpeed = 0.0f;
         mTargetPaceStr = "--:-- tgt";
-        mDebugStr = "no step";
-    }
-
-    function setSpeed(speed as Float) as Void {
-        mSpeed = speed;
-        mLastMsgTime = System.getTimer();
-        WatchUi.requestUpdate();
+        mLastSentStr = "";
     }
 
     function onLayout(dc as Dc) as Void {
-    }
-
-    // null.toString() crashes in Monkey C — this is the safe version.
-    hidden function _dbg(x) as String {
-        return (x == null) ? "null" : x.toString();
     }
 
     hidden function _paceStrFromMs(speedMs as Float) as String {
@@ -44,76 +32,49 @@ class DataFieldView extends WatchUi.DataField {
         return mins.toString() + ":" + secs.format("%02d");
     }
 
-    function compute(info as Activity.Info) as Void {
-        var now = System.getTimer();
-        if (mLastMsgTime > 0 && (now - mLastMsgTime < 10000)) {
-            mConnectionStatus = "Connected";
-        } else {
-            mConnectionStatus = "Disconnected";
-        }
-
-        var targetPaceLowMs = 0.0f;
-        var targetPaceHighMs = 0.0f;
-        var currentSpeedMs = 0.0f;
-
-        if (info != null && info.currentSpeed != null) {
-            currentSpeedMs = info.currentSpeed as Float;
-        }
-
-        // Activity.getCurrentWorkoutStep() is the module-level function — distinct
-        // from (and apparently more reliable in a DataField's compute() context
-        // than) the Activity.Info.currentWorkoutStep property, which came back
-        // null even mid-workout.
-        var infoHasStep = (info != null) && (info has :currentWorkoutStep) && (info.currentWorkoutStep != null);
+    // Target pace (m/s) from the current workout step, or 0 when there is no
+    // speed-targeted step. Activity.getCurrentWorkoutStep() is the
+    // module-level function — distinct from (and more reliable in a
+    // DataField's compute() context than) Activity.Info.currentWorkoutStep,
+    // which came back null even mid-workout.
+    hidden function targetPaceMps() as Float {
         var wStep = Activity.getCurrentWorkoutStep();
-        mDebugStr = "getCurrentWorkoutStep()=" + _dbg(wStep) + " info.currentWorkoutStep=" + infoHasStep.toString();
-        if (wStep != null) {
-            if ((wStep has :step) && wStep.step != null) {
-                wStep = wStep.step;
-                mDebugStr += " .step=" + _dbg(wStep);
+        if (wStep == null) { return 0.0f; }
+        if ((wStep has :step) && wStep.step != null) {
+            wStep = wStep.step;   // intervals nest the active step
+        }
+        var low = 0.0f;
+        var high = 0.0f;
+        if ((wStep has :targetType) &&
+            wStep.targetType == Activity.WORKOUT_STEP_TARGET_SPEED) {
+            if ((wStep has :targetValueLow) && wStep.targetValueLow != null) {
+                low = wStep.targetValueLow as Float;
             }
-            var rawTargetType = (wStep has :targetType) ? wStep.targetType : null;
-            var rawLow = (wStep has :targetValueLow) ? wStep.targetValueLow : null;
-            var rawHigh = (wStep has :targetValueHigh) ? wStep.targetValueHigh : null;
-            mDebugStr += " targetType=" + _dbg(rawTargetType)
-                + " (SPEED=" + Activity.WORKOUT_STEP_TARGET_SPEED.toString() + ")"
-                + " low=" + _dbg(rawLow) + " high=" + _dbg(rawHigh);
-            if (rawTargetType == Activity.WORKOUT_STEP_TARGET_SPEED) {
-                if (rawLow != null) { targetPaceLowMs = rawLow as Float; }
-                if (rawHigh != null) { targetPaceHighMs = rawHigh as Float; }
+            if ((wStep has :targetValueHigh) && wStep.targetValueHigh != null) {
+                high = wStep.targetValueHigh as Float;
             }
         }
-        System.println("[debug] " + mDebugStr);
+        if (low > 0.0f && high > 0.0f) { return (low + high) / 2.0f; }
+        if (low > 0.0f) { return low; }
+        return high;
+    }
 
-        // Update target pace display string
-        var targetMidMs = 0.0f;
-        if (targetPaceLowMs > 0.0f && targetPaceHighMs > 0.0f) {
-            targetMidMs = (targetPaceLowMs + targetPaceHighMs) / 2.0f;
-        } else if (targetPaceLowMs > 0.0f) {
-            targetMidMs = targetPaceLowMs;
-        } else if (targetPaceHighMs > 0.0f) {
-            targetMidMs = targetPaceHighMs;
-        }
-        mTargetPaceStr = targetMidMs > 0.05f
-            ? (_paceStrFromMs(targetMidMs) + " tgt")
+    function compute(info as Activity.Info) as Void {
+        var targetMps = targetPaceMps();
+        mTargetPaceStr = targetMps > 0.05f
+            ? (_paceStrFromMs(targetMps) + " tgt")
             : "--:-- tgt";
 
-        // Send workout status to phone every 5s
-        var settings = System.getDeviceSettings();
-        var phonePaired = (settings has :phoneConnected) && settings.phoneConnected;
-        if (phonePaired && (now - mLastSendTime > 5000)) {
-            mLastSendTime = now;
-            var msg = {};
-            msg.put("type", "workoutStatus");
-            var targetPace = targetMidMs > 0.0f ? targetMidMs : currentSpeedMs;
-            msg.put("targetPace", targetPace);
-            if (targetPaceLowMs > 0.0f) { msg.put("targetPaceLow", targetPaceLowMs); }
-            if (targetPaceHighMs > 0.0f) { msg.put("targetPaceHigh", targetPaceHighMs); }
-            if (currentSpeedMs > 0.0f) { msg.put("currentSpeed", currentSpeedMs); }
-            try {
-                Communications.transmit(msg, null, new CommListener());
-            } catch (e) {
-                System.println("Transmit error: " + e.getErrorMessage());
+        // Push the target to the bridge every 5 s while one exists. No
+        // currentSpeed fallback (unlike the old phone path): echoing measured
+        // speed back as a belt command would chase the footpod reading.
+        var now = System.getTimer();
+        if (targetMps > 0.05f && mBle != null && mBle.isConnected()
+            && (now - mLastSendTime > 5000)) {
+            var kmh = targetMps * 3.6f;
+            if (mBle.writeSpeedKmh(kmh)) {
+                mLastSendTime = now;
+                mLastSentStr = "sent " + kmh.format("%.1f") + " km/h";
             }
         }
     }
@@ -131,34 +92,24 @@ class DataFieldView extends WatchUi.DataField {
         var w = dc.getWidth();
         var h = dc.getHeight();
 
-        // Treadmill pace from phone (top)
-        var paceStr = "--:-- /mi";
-        if (mSpeed > 0.1f) {
-            paceStr = _paceStrFromMs(mSpeed / 3.6f) + " /mi";
+        // Workout target pace (top)
+        dc.drawText(w / 2, h / 4, Graphics.FONT_MEDIUM, mTargetPaceStr,
+            Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
+
+        // Last command sent (middle)
+        dc.drawText(w / 2, h / 2, Graphics.FONT_XTINY, mLastSentStr,
+            Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
+
+        // Bridge link state (bottom): CONN / SCAN / --
+        var link = "--";
+        if (mBle != null) {
+            if (mBle.isConnected()) {
+                link = "CONN";
+            } else if (mBle.isScanning()) {
+                link = "SCAN";
+            }
         }
-        dc.drawText(w / 2, h / 4, Graphics.FONT_MEDIUM, paceStr,
+        dc.drawText(w / 2, h * 3 / 4, Graphics.FONT_XTINY, link,
             Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
-
-        // Workout target pace (middle)
-        dc.drawText(w / 2, h / 2, Graphics.FONT_SMALL, mTargetPaceStr,
-            Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
-
-        // Connection status (bottom)
-        dc.drawText(w / 2, h * 3 / 4, Graphics.FONT_XTINY, mConnectionStatus,
-            Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
-
-        // Debug: raw currentWorkoutStep dump, unformatted (very bottom)
-        dc.drawText(w / 2, h * 15 / 16, Graphics.FONT_XTINY, mDebugStr,
-            Graphics.TEXT_JUSTIFY_CENTER | Graphics.TEXT_JUSTIFY_VCENTER);
-    }
-}
-
-class CommListener extends Communications.ConnectionListener {
-    function initialize() {
-        Communications.ConnectionListener.initialize();
-    }
-    function onComplete() as Void {}
-    function onError() as Void {
-        System.println("Transmit Error");
     }
 }
