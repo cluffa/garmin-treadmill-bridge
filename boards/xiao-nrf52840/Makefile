@@ -98,7 +98,9 @@ INC_FOLDERS += \
   $(PROJ_DIR) \
   $(CORE_DIR) \
   $(S340_API) \
+  $(S340_API)/nrf52 \
   $(SDK_ROOT)/components \
+  $(SDK_ROOT)/components/boards \
   $(SDK_ROOT)/components/ble/common \
   $(SDK_ROOT)/components/ble/ble_advertising \
   $(SDK_ROOT)/components/ble/ble_db_discovery \
@@ -151,6 +153,9 @@ CFLAGS += -DSOFTDEVICE_PRESENT
 CFLAGS += -DNRF_SD_BLE_API_VERSION=7
 CFLAGS += -DUSE_APP_CONFIG
 CFLAGS += -DAPP_TIMER_V2 -DAPP_TIMER_V2_RTC1_ENABLED
+# ANT SoftDevice evaluation license key (nrf_sdm.h) — personal use only; a
+# commercial release requires a license from thisisant.com.
+CFLAGS += -DANT_LICENSE_KEY='"3831-521d-7df9-24d8-eff3-467b-225f-a00e"'
 
 ASMFLAGS += -g3 -mcpu=cortex-m4 -mthumb -mabi=aapcs
 ASMFLAGS += -mfloat-abi=hard -mfpu=fpv4-sp-d16

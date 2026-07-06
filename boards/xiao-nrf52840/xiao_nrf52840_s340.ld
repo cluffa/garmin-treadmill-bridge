@@ -35,6 +35,12 @@ SECTIONS
     KEEP(*(SORT(.log_filter_data*)))
     PROVIDE(__stop_log_filter_data = .);
   } > RAM
+  .fs_data :
+  {
+    PROVIDE(__start_fs_data = .);
+    KEEP(*(.fs_data))
+    PROVIDE(__stop_fs_data = .);
+  } > RAM
 } INSERT AFTER .data;
 
 SECTIONS
@@ -101,6 +107,12 @@ SECTIONS
     PROVIDE(__start_log_backends = .);
     KEEP(*(SORT(.log_backends*)))
     PROVIDE(__stop_log_backends = .);
+  } > FLASH
+  .pwr_mgmt_data :
+  {
+    PROVIDE(__start_pwr_mgmt_data = .);
+    KEEP(*(SORT(.pwr_mgmt_data*)))
+    PROVIDE(__stop_pwr_mgmt_data = .);
   } > FLASH
 } INSERT AFTER .text
 

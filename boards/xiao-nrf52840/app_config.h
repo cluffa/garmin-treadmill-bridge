@@ -50,6 +50,13 @@
 /* ---- BLE modules ---------------------------------------------------------- */
 #define NRF_BLE_GATT_ENABLED 1
 #define NRF_BLE_SCAN_ENABLED 1
+/* The ble_ant_app_hrm template sdk_config.h has no nrf_ble_scan section, so
+ * the module's whole config block lives here, not just overrides. */
+#define NRF_BLE_SCAN_BUFFER 31
+#define NRF_BLE_SCAN_SCAN_PHY 1              /* 1 Mbps */
+#define NRF_BLE_SCAN_OBSERVER_PRIO 1
+#define NRF_BLE_SCAN_NAME_MAX_LEN 32
+#define NRF_BLE_SCAN_SHORT_NAME_MAX_LEN 32
 #define NRF_BLE_SCAN_SCAN_INTERVAL 160        /* 100 ms */
 #define NRF_BLE_SCAN_SCAN_WINDOW 80           /* 50 ms — leave air time for ANT */
 #define NRF_BLE_SCAN_SCAN_DURATION 0          /* forever */
@@ -74,6 +81,17 @@
 #define NRF_BLE_CONN_PARAMS_ENABLED 1
 #define NRF_BLE_CONN_PARAMS_MAX_SLAVE_LATENCY_DEVIATION 499
 #define NRF_BLE_CONN_PARAMS_MAX_SUPERVISION_TIMEOUT_DEVIATION 65535
+
+/* ---- clock driver (app_timer LFCLK request; SDH takes over once SD is up) - */
+#define NRFX_CLOCK_ENABLED 1
+#define NRF_CLOCK_ENABLED 1                  /* legacy nrf_drv_clock alias */
+#define NRFX_CLOCK_CONFIG_LF_SRC 1           /* XTAL, matches NRF_SDH_CLOCK_LF_SRC */
+#define CLOCK_CONFIG_LF_SRC 1
+#define NRFX_CLOCK_CONFIG_IRQ_PRIORITY 6
+#define NRFX_CLOCK_CONFIG_LF_CAL_ENABLED 0
+#define CLOCK_CONFIG_SOC_OBSERVER_PRIO 0
+#define CLOCK_CONFIG_STATE_OBSERVER_PRIO 0
+#define CLOCK_CONFIG_LOG_ENABLED 0
 
 /* ---- libraries ------------------------------------------------------------ */
 #define APP_TIMER_ENABLED 1
