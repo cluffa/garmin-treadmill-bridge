@@ -68,6 +68,17 @@ jobs:
         with:
           name: garmin-data-field-fenix8solar51mm
           path: ./garmin_data_field/out/app.prg
+      - name: Build Garmin Ctrl App
+        uses: blackshadev/garmin-connectiq-build-action@9.1.0
+        with:
+          projectJungle: ./garmin_ctrl_app/monkey.jungle
+          developerKey: ./developer_key.der
+          outputPath: ./garmin_ctrl_app/out/app.prg
+          device: fenix8solar51mm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: garmin-ctrl-app-fenix8solar51mm
+          path: ./garmin_ctrl_app/out/app.prg
 
   build-android:
     runs-on: ubuntu-latest

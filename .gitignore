@@ -20,6 +20,7 @@ tools/mtp_send_to_folder
 
 # Garmin Connect IQ build output
 garmin_data_field/out/
+garmin_ctrl_app/out/
 
 # Python
 __pycache__/
