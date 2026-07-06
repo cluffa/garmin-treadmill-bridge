@@ -1,6 +1,6 @@
-# garmin-ftms-sync-esp32
+# garmin-treadmill-bridge
 
-[![CI](https://github.com/cluffa/garmin-ftms-sync-esp32/actions/workflows/ci.yml/badge.svg)](https://github.com/cluffa/garmin-ftms-sync-esp32/actions/workflows/ci.yml)
+[![CI](https://github.com/cluffa/garmin-treadmill-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/cluffa/garmin-treadmill-bridge/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Firmware that bridges a Bluetooth treadmill to a Garmin watch and an Android phone. The device connects to a treadmill as a BLE central (FTMS or iFit), re-broadcasts live speed and distance to a Garmin watch as a native BLE RSC sensor, and exposes a USB serial interface so an Android phone can select the treadmill, monitor workout data, and send speed/incline control commands.
