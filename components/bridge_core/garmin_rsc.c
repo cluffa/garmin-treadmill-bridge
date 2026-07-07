@@ -2,7 +2,7 @@
  * garmin_rsc.c — BLE GATT server for Running Speed & Cadence (RSC, 0x1814).
  *
  * This module owns only the GATT table and notification logic.
- * Advertising and GAP event handling are owned by nus_ctrl.c (the single
+ * Advertising and GAP event handling are owned by ctrl_svc.c (the single
  * peripheral advertiser), which calls garmin_rsc_on_gap_event() so RSC can
  * track subscriptions and connection handles.
  */
@@ -112,7 +112,7 @@ static const struct ble_gatt_svc_def s_rsc_svcs[] = {
     { 0 },
 };
 
-/* ---- GAP event handler (called by nus_ctrl's single GAP callback) ------- */
+/* ---- GAP event handler (called by ctrl_svc's single GAP callback) ------- */
 
 void garmin_rsc_on_gap_event(struct ble_gap_event *event)
 {
@@ -176,7 +176,7 @@ void garmin_rsc_register_gatt(void)
     ESP_LOGI(TAG, "RSC GATT service registered");
 }
 
-/* garmin_rsc_start() is now a no-op; advertising is owned by nus_ctrl. */
+/* garmin_rsc_start() is now a no-op; advertising is owned by ctrl_svc. */
 void garmin_rsc_start(void)
 {
     ESP_LOGI(TAG, "RSC ready (meas_handle=%d, batt_handle=%d)",
@@ -210,4 +210,4 @@ void garmin_rsc_update_battery(uint8_t pct)
 }
 
 bool garmin_rsc_subscribed(void) { return s_subscribed; }
-bool garmin_rsc_advertising(void) { return false; } /* owned by nus_ctrl */
+bool garmin_rsc_advertising(void) { return false; } /* owned by ctrl_svc */

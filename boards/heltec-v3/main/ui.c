@@ -2,7 +2,7 @@
 #include "machine.h"
 #include "garmin_rsc.h"
 #include "serial_ctrl.h"
-#include "nus_ctrl.h"
+#include "ctrl_svc.h"
 #include "button.h"
 #include "display.h"
 #include "display_format.h"
@@ -33,7 +33,11 @@ static void on_state(const treadmill_state_t *s) {
     s_last_state = *s;
     garmin_rsc_update(s);
     serial_ctrl_push_state(s);
-    nus_ctrl_push_state(s);
+}
+
+static void on_link(bool connected) {
+    (void)connected;
+    ctrl_svc_notify_status();   /* push 'S' frame to the watch */
 }
 
 static void on_button(button_event_t e) {
@@ -126,8 +130,9 @@ static void render_task(void *arg) {
 void ui_start(void) {
     battery_init();
     garmin_rsc_start();
-    nus_ctrl_start();
+    ctrl_svc_start();
     serial_ctrl_start();
+    machine_set_link_cb(on_link);
     machine_set_data_cb(on_state);
     machine_try_last();   /* reconnect to last device, else scan */
     xTaskCreate(render_task, "render", 4096, NULL, 4, &s_render);

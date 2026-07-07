@@ -8,7 +8,7 @@
 #include "services/gatt/ble_svc_gatt.h"
 #include "machine.h"
 #include "garmin_rsc.h"
-#include "nus_ctrl.h"
+#include "ctrl_svc.h"
 #include "serial_ctrl.h"
 
 static const char *TAG = "app";
@@ -20,7 +20,12 @@ static void on_state(const treadmill_state_t *s)
     s_last_state = *s;
     garmin_rsc_update(s);
     serial_ctrl_push_state(s);
-    nus_ctrl_push_state(s);
+}
+
+static void on_link(bool connected)
+{
+    (void)connected;
+    ctrl_svc_notify_status();   /* push 'S' frame to the watch */
 }
 
 static void on_host_sync(void)
@@ -35,11 +40,12 @@ static void on_host_sync(void)
 
     machine_set_addr_type(own_addr_type);
     garmin_rsc_set_addr_type(own_addr_type);
-    nus_ctrl_set_addr_type(own_addr_type);
+    ctrl_svc_set_addr_type(own_addr_type);
+    machine_set_link_cb(on_link);
     machine_set_data_cb(on_state);
     serial_ctrl_start();
     garmin_rsc_start();
-    nus_ctrl_start();
+    ctrl_svc_start();
     machine_try_last();
 }
 
@@ -48,7 +54,7 @@ static void nimble_host_task(void *param)
     ble_svc_gap_init();
     ble_svc_gatt_init();
     garmin_rsc_register_gatt();
-    nus_ctrl_register_gatt();
+    ctrl_svc_register_gatt();
     nimble_port_run();
     nimble_port_freertos_deinit();
 }

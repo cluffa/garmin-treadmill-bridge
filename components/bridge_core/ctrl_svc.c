@@ -8,7 +8,7 @@
  * ctrl_frames.h (CIQ pins the ATT MTU at 23); every other command's JSON
  * reply goes to the console log only.
  *
- * Also owns the single advertisement (previously nus_ctrl's): primary packet
+ * Also owns the single advertisement (previously nus_ctrl's, now deleted): primary packet
  * carries the A6ED 128-bit service UUID (the watch apps filter on it), scan
  * response carries RSC 0x1814 + device name for native sensor pairing. The
  * watch holds at most one link, so RSC mode and control mode are naturally
