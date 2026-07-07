@@ -147,6 +147,7 @@ Python scripts for exercising the bridge without real hardware. See
 |--------|------|---------|
 | `mock_treadmill.py` | FTMS peripheral | stand-in treadmill; accepts CP speed/incline writes |
 | `mock_watch.py` | RSC central | verify bridge's RSC peripheral output end-to-end |
+| `mock_ctrl_watch.py` | ctrl central | drive the A6ED control service like the data field / ctrl app |
 | `sensor_logger.py` | RSC+FTMS central | log all nearby sensors to console + CSV |
 
 All are self-contained `uv` scripts (no venv needed):
