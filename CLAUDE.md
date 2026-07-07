@@ -12,10 +12,6 @@ Project-specific notes that aren't obvious from the README or code.
 ./build.sh heltec-v3 flash         # build + flash (auto-detects port)
 ./build.sh heltec-v3 flash /dev/cu.usbserial-0001
 
-# Flutter phone app
-cd app && flutter run              # run on connected device
-cd app && flutter build apk        # release APK
-
 # Garmin Connect IQ apps (requires Connect IQ SDK + developer key)
 # CI uses blackshadev/garmin-connectiq-build-action; locally use monkeyc CLI:
 # monkeyc -f garmin_data_field/monkey.jungle -d fenix8solar51mm -o app.prg
@@ -181,20 +177,26 @@ label. `machine_connect()` therefore tears down the *other* protocol
 before connecting, and `on_evt()` suppresses auto-reconnect while the other
 protocol is connecting/connected. **Do not reintroduce simultaneous connections.**
 
-## Forward Data Stream (Treadmill -> Garmin)
+## ESP32 watch link: RSC mode vs control mode (one at a time)
 
-The primary implemented data stream broadcasts treadmill metrics to the watch:
+The ESP32 exposes one GATT server with both the RSC sensor (0x1814) and the
+watch control service (`A6ED0001-…`, same UUIDs/grammar as the nRF bridge —
+`ctrl_svc.c` is a NimBLE port of `platform_ble_ctrl_svc.c`). The single
+advertisement (owned by `ctrl_svc.c`) carries the A6ED 128-bit UUID in the
+primary packet and RSC 0x1814 + name in the scan response. The watch holds
+one link to the bridge, so the two modes are mutually exclusive; whichever
+watch feature connects first wins. To use control mode, disable/unpair the
+RSC sensor on the watch or it grabs the connection.
+
+**RSC mode (Treadmill -> Garmin):**
 * `Treadmill (FTMS/iFit)` -> `ESP32 (BLE Central)` -> `Garmin Watch (BLE RSC Peripheral)`
-* The ESP32 connects to the treadmill, parses its proprietary or standard data frames into a generic `treadmill_state_t` via `bridge_core`, and then `garmin_rsc.c` handles exposing it as a standard BLE Running Speed and Cadence (RSC) sensor that any Garmin watch can pair with.
+* The ESP32 parses treadmill frames into a generic `treadmill_state_t` via `bridge_core`; `garmin_rsc.c` exposes it as a standard RSC sensor any Garmin watch can pair with.
 
-## Reverse Data Stream (Garmin -> Treadmill)
-
-Automatically controls treadmill speed based on Garmin workout pace targets: `Garmin Watch (ConnectIQ)` -> `Phone App` -> `ESP32` -> `Treadmill`. Fully implemented.
-
-1. **Watch:** DataField reads `Activity.Info.currentWorkoutStep` for target pace (m/s); falls back to `currentSpeed`. Sends `workoutStatus` with `targetPace`, `targetPaceLow`, `targetPaceHigh` every 5s.
-2. **Phone App:** `garmin_ciq_service.dart` handles `workoutStatus` messages — converts target pace from m/s to km/h and calls `_bridge.setSpeed()`; exposes `targetSpeedLowKmh`/`targetSpeedHighKmh` getters.
-3. **Phone -> ESP32:** Flutter app uses BLE NUS to send control strings (e.g. `speed 10.0`) to the ESP32.
-4. **ESP32 -> Treadmill:** `nus_ctrl.c` and `ctrl_dispatch.c` parse incoming speed commands and apply them to the treadmill via FTMS/iFit.
+**Control mode (Garmin -> Treadmill):**
+* `Garmin Watch (CIQ DataField, BLE)` -> `ESP32 ctrl_svc` -> `Treadmill (FTMS/iFit Control)`
+* The data field writes uppercase `ctrl_dispatch` lines (`SPEED <kmh>`) to char `A6ED0002-…`; `LIST`/`STATUS` answer on the notify char `A6ED0003-…` in the compact `'D'/'E'/'S'` frames from `ctrl_frames.h`; other commands' JSON replies go to the console log only. An `'S'` frame is pushed on treadmill link changes (via `machine_set_link_cb`).
+* `garmin_ctrl_app/` (picker) works against the ESP32 too — `SCAN`/`LIST`/`CONNECT <n>` run through the shared grammar. No belt-speed display in control mode by design (wrist pace covers recording).
+* There is no phone app anymore; the former Flutter app + BLE NUS path was removed in favor of this direct watch link.
 
 
 ## iFit / NordicTrack 6.5S (I_TL) protocol

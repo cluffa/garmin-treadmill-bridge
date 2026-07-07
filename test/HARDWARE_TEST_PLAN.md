@@ -1,10 +1,13 @@
 # Hardware Test Plan
 
 Covers the two boards (XIAO C6, Heltec v3) and the full data path:
-treadmill → ESP32 → Garmin watch, plus the reverse path:
-watch → phone app → ESP32 → treadmill.
+treadmill → ESP32 → Garmin watch (RSC mode), plus the reverse path:
+watch data field → ESP32 control service → treadmill (control mode).
+The watch holds one link to the bridge, so the two modes are tested
+separately — disable the RSC sensor pairing on the watch before control-mode
+tests.
 
-**Prerequisites:** ESP32 flashed, treadmill powered on and idle, Garmin watch paired to nothing, phone with the Flutter app installed, `tools/serial_cli.py` available.
+**Prerequisites:** ESP32 flashed, treadmill powered on and idle, Garmin watch paired to nothing, the CIQ data field + ctrl app `.prg`s installed, `tools/serial_cli.py` available.
 
 ---
 
@@ -66,17 +69,18 @@ Goal: Garmin watch sees and pairs to the bridge's RSC sensor.
 
 ---
 
-## 5. Phone app → ESP32 control (reverse path, steps 1–2)
+## 5. Control service basics (reverse path, no watch needed)
 
-Goal: phone app connects and can issue speed/incline commands.
+Goal: the A6ED control service accepts commands and answers in compact frames.
 
 | Step | Action | Expected |
 |------|--------|----------|
-| 5.1 | Open Flutter app; tap "Connect via USB" | App shows connected, treadmill state streams in |
-| 5.2 | (BLE alt) Scan for ESP32 in app, connect via BLE NUS | Same as 5.1 |
-| 5.3 | From app UI, send speed command (e.g. 8 km/h) | Serial log shows `SPEED 8.0`; treadmill adjusts |
-| 5.4 | Send incline command | Treadmill incline changes |
-| 5.5 | Send stop | Treadmill decelerates to 0 |
+| 5.1 | Run `./test/mock/mock_ctrl_watch.py` on Mac | Connects, subscribes; prints an `'S'` status frame greeting |
+| 5.2 | Type `LIST` | One `'D'` frame per discovered treadmill + `'E'` end frame |
+| 5.3 | Type `SPEED 8.0` | Serial log shows the dispatch; treadmill adjusts |
+| 5.4 | Type `INCLINE 1.5` | Treadmill incline changes |
+| 5.5 | Type `STOP` | Treadmill decelerates to 0 |
+| 5.6 | Power-cycle the treadmill link (or `CONNECT <n>`) | Unsolicited `'S'` frame arrives on the link change |
 
 ---
 
@@ -88,14 +92,14 @@ Goal: active Garmin workout with a pace target automatically drives treadmill sp
 |------|--------|----------|
 | 6.1 | Install the ConnectIQ DataField on the watch (`.prg` via MTP or Garmin Express) | DataField appears in available fields |
 | 6.2 | Create a structured workout with a speed-target interval (e.g. 10 km/h) | — |
-| 6.3 | Start the workout on the watch with the DataField active; confirm phone app connected to ESP32 | DataField shows connection status "Connected" |
+| 6.3 | Disable the RSC sensor pairing on the watch; start the workout with the DataField active | DataField finds the bridge over BLE and shows the link as up |
 | 6.4 | Enter the speed-target interval | Treadmill adjusts to the target within ~5 s (DataField sends every 5 s) |
 | 6.5 | Skip to a different pace interval | Treadmill adjusts to new target |
 | 6.6 | End workout / no active step | Treadmill stays at last commanded speed (no spurious stops) |
 
 **What to check in logs:**
 - Serial CLI `status` shows speed matching the workout target (× 3.6 for m/s → km/h).
-- `garmin_ciq_service.dart` debug output (if enabled) shows `workoutStatus` messages with correct `targetPace`.
+- ESP32 console shows `ctrl_svc: rx "SPEED …"` lines every ~5 s while a speed-target step is active.
 
 ---
 
@@ -118,7 +122,7 @@ Only relevant if testing the Heltec board.
 | 8.1 | Power-cycle treadmill while connected | Bridge detects disconnect; auto-reconnects within ~30 s |
 | 8.2 | Move watch out of BLE range then back | RSC re-subscribes; data resumes |
 | 8.3 | Send `connect` while already connected to a different device | Bridge tears down old connection first (no dual-machine state) |
-| 8.4 | Phone app disconnect → reconnect mid-workout | Treadmill control resumes; no stale speed command applied |
+| 8.4 | Data field BLE disconnect → reconnect mid-workout | Bridge re-advertises; control resumes; no stale speed command applied |
 
 ---
 
