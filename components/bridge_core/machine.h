@@ -19,6 +19,13 @@ const ftms_device_t *machine_connected_device(void);
 bool   machine_connecting(void);
 int8_t machine_conn_rssi(void);
 
+/* Copy the NVS-persisted last-connected device into *out. False if none. */
+bool machine_saved_device(ftms_device_t *out);
+
+/* Register a callback fired when the treadmill link comes up or goes down
+ * (used by ctrl_svc to push an unsolicited 'S' status frame). */
+void machine_set_link_cb(void (*cb)(bool connected));
+
 /* Write treadmill speed/incline via FTMS Control Point. */
 bool machine_set_speed(float kmh);
 bool machine_set_incline(float pct);

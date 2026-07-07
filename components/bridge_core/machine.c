@@ -27,6 +27,7 @@ static int              s_ndev;
 static ftms_device_t    s_pending;   /* device currently being connected */
 static bool             s_scanning;  /* suppress reconnect while scan is pending */
 static machine_state_cb s_data_cb;   /* stored so machine_connect can emit zero state */
+static void           (*s_link_cb)(bool connected);
 
 /* ---- NVS persistence of the last device (incl. protocol) ---------------- */
 
@@ -54,6 +55,7 @@ static void on_evt(int connected) {
         save_last(&s_pending);   /* remember what we connected to */
         ESP_LOGI(TAG, "connected (%s)",
                  s_pending.proto == MACHINE_PROTO_IFIT ? "iFit" : "FTMS");
+        if (s_link_cb) s_link_cb(true);
     } else {
         if (s_scanning) return;  /* cancelled intentionally; scan will start */
         /* A disconnect arriving while the other protocol is already
@@ -61,6 +63,7 @@ static void on_evt(int connected) {
          * tears down the old protocol) — don't auto-reconnect the old one. */
         if (machine_connecting() || machine_connected()) return;
         ESP_LOGI(TAG, "disconnected — reconnecting to last");
+        if (s_link_cb) s_link_cb(false);
         machine_try_last();      /* one re-attempt; its failure falls to scan */
     }
 }
@@ -223,3 +226,7 @@ bool machine_stop(void) {
     if (machine_ifit_connected()) return machine_ifit_stop();
     return machine_ftms_stop();
 }
+
+bool machine_saved_device(ftms_device_t *out) { return load_last(out); }
+
+void machine_set_link_cb(void (*cb)(bool connected)) { s_link_cb = cb; }
