@@ -72,7 +72,7 @@ static SemaphoreHandle_t s_tx_mutex;
 #define TXQ_LEN 12
 #define TXQ_RETRY_MS 30
 static struct { uint8_t len; uint8_t data[CTRL_FRAME_MAX]; } s_txq[TXQ_LEN];
-static volatile uint8_t s_txq_head, s_txq_tail;
+static uint8_t s_txq_head, s_txq_tail;   /* all access under s_tx_mutex */
 static struct ble_npl_callout s_txq_retry;
 
 /* caller holds s_tx_mutex */
@@ -85,8 +85,11 @@ static void txq_pump(void)
         }
         struct os_mbuf *om = ble_hs_mbuf_from_flat(s_txq[s_txq_tail].data,
                                                    s_txq[s_txq_tail].len);
-        int rc = om ? ble_gatts_notify_custom(s_conn, s_rsp_handle, om)
-                    : BLE_HS_ENOMEM;
+        int rc;
+        if (!om)
+            rc = BLE_HS_ENOMEM;        /* mbuf pool exhausted — retry too */
+        else
+            rc = ble_gatts_notify_custom(s_conn, s_rsp_handle, om);
         if (rc == BLE_HS_ENOMEM || rc == BLE_HS_EBUSY) {
             ble_npl_callout_reset(&s_txq_retry,
                                   ble_npl_time_ms_to_ticks32(TXQ_RETRY_MS));

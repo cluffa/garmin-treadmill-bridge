@@ -69,8 +69,15 @@ overflow, drop the new frame and log a warning — same as the nRF glue.
 Advertising ownership moves to `ctrl_svc` (or a small shared adv module).
 Layout is today's with the NUS UUID swapped out:
 
-- ADV packet: flags + 128-bit `A6ED0001…` service UUID
-- Scan response: 16-bit `0x1814` (RSC) + device name
+- ADV packet: flags + 16-bit `0x1814` (RSC) + device name
+- Scan response: 128-bit `A6ED0001…` service UUID
+
+> **Amended after issue #15:** the layout originally specified here (A6ED in
+> the ADV packet, RSC + name in the scan response) shipped in PR #14 and broke
+> CIQ discovery — Garmin CIQ's `ScanResult.getServiceUuids()` only surfaces
+> scan-response UUIDs, so the watch apps never matched. The A6ED UUID must be
+> in the scan response; all three fields don't fit one 31-byte packet, so RSC
+> `0x1814` + name moved to the ADV packet (native sensor pairing parses it).
 
 RSC `0x1814` stays discoverable for native sensor pairing; the data field and
 ctrl app scan for the 128-bit ctrl UUID, exactly as they do against the nRF

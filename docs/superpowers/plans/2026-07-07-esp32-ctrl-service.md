@@ -84,6 +84,16 @@ void ctrl_svc_notify_status(void);   /* push 'S' frame if subscribed */
   - Advertising (`start_advertising()`): copy of `nus_ctrl.c`'s — same params/intervals — with `fields.uuids128 = &CTRL_SVC_UUID`; scan response keeps RSC `0x1814` + GAP device name.
   - GAP event cb: forward every event to `garmin_rsc_on_gap_event(event)`. CONNECT: on failure restart advertising; on success record `s_conn`, reset `s_notify_on=false`, clear queue — do **not** restart advertising (single watch link; RSC/ctrl exclusivity by design). DISCONNECT: clear state, `start_advertising()`. SUBSCRIBE on `s_rsp_handle`: set `s_notify_on = cur_notify`, and when it turns on call `send_status_frame()` (greeting). NOTIFY_TX: `txq_pump()`.
   - Public API per the header above; `ctrl_svc_notify_status()` = if connected+subscribed, `send_status_frame()`.
+
+  > **Amended after issue #15 / the notify-deadlock fix:** two details above
+  > shipped broken and were corrected post-merge. (1) Advertising layout is
+  > reversed from the plan: RSC `0x1814` + name go in the ADV packet and the
+  > A6ED 128-bit UUID in the scan response — CIQ's `getServiceUuids()` only
+  > surfaces scan-response UUIDs. (2) There is no `NOTIFY_TX: txq_pump()`
+  > case: NimBLE raises `BLE_GAP_EVENT_NOTIFY_TX` synchronously inside
+  > `ble_gatts_notify_custom()` (unlike the SoftDevice's deferred
+  > `HVN_TX_COMPLETE`), so pumping there deadlocks on `s_tx_mutex`; stalled
+  > frames are retried via a `ble_npl_callout` instead.
 - [ ] **Step 2: Add `"ctrl_svc.c"` to `CMakeLists.txt` SRCS.**
 - [ ] **Step 3: Build** `./build.sh heltec-v3` → exits 0 (service not yet wired; compiles standalone).
 - [ ] **Step 4: Commit** `git commit -m "feat(bridge_core): NimBLE A6ED control service (port of nRF ctrl svc)"`
