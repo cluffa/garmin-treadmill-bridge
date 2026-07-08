@@ -3,7 +3,7 @@
 [![CI](https://github.com/cluffa/garmin-treadmill-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/cluffa/garmin-treadmill-bridge/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Firmware that bridges a Bluetooth treadmill to a Garmin watch and an Android phone. The device connects to a treadmill as a BLE central (FTMS or iFit), re-broadcasts live speed and distance to a Garmin watch as a native BLE RSC sensor, and exposes a USB serial interface so an Android phone can select the treadmill, monitor workout data, and send speed/incline control commands.
+Firmware that bridges a Bluetooth treadmill to a Garmin watch — no phone involved. The device connects to a treadmill as a BLE central (FTMS or iFit) and offers the watch two mutually exclusive links, chosen entirely on the watch: pair it as a native BLE RSC sensor (live speed/distance), or connect the Connect IQ data field to its control service so structured-workout target paces drive the belt. A USB serial CLI covers setup and debugging.
 
 ## Hardware
 
@@ -11,26 +11,24 @@ Firmware that bridges a Bluetooth treadmill to a Garmin watch and an Android pho
 |-------|--------|-------|
 | Seeed XIAO ESP32-C6 | `esp32c6` | Primary — USB-C, compact |
 | Heltec WiFi LoRa 32 v3 | `esp32s3` | Has OLED display and battery management |
-| Seeed XIAO nRF52840 | nRF52840 + S340 | ANT+ bridge variant — no phone needed (see below) |
+| Seeed XIAO nRF52840 | nRF52840 + S340 | ANT+ bridge variant — both streams at once (see below) |
 
 ## Data Streams & Architecture
 
-The system coordinates two independent data streams:
+The ESP32 boards offer two data streams; the watch holds a single BLE link to the bridge, so you use one at a time (whichever connects first wins — disable the RSC sensor pairing on the watch when you want control mode):
 
-1. **Treadmill to Garmin (Implemented)**
+1. **RSC mode — treadmill data to the watch**
    * `Treadmill (FTMS/iFit)` -> `ESP32 (BLE Central)` -> `Garmin Watch (BLE RSC Peripheral)`
-   * Re-broadcasts live speed and distance to the watch.
+   * Pair the bridge as a running sensor; live belt speed and distance are recorded in the activity.
 
-2. **Garmin to Treadmill (Implemented)**
-   * `Garmin Watch (ConnectIQ DataField)` -> `Phone App (BLE)` -> `ESP32 (BLE NUS)` -> `Treadmill (FTMS/iFit Control)`
-   * Sends the current Garmin workout target pace to automatically control the treadmill's speed.
-   * **Watch -> Phone**: ConnectIQ DataField reads `Activity.Info.currentWorkoutStep` for target pace; falls back to `currentSpeed`. Sends `workoutStatus` with `targetPace`, `targetPaceLow`, `targetPaceHigh` every 5s.
-   * **Phone -> ESP32**: Phone app receives `workoutStatus` via BLE NUS, converts target pace (m/s → km/h), and sends a `speed` command to the ESP32.
-   * **ESP32 -> Treadmill**: The ESP32 parses incoming `speed <x>` commands and writes the correct control characteristics to the treadmill.
+2. **Control mode — workout targets to the treadmill**
+   * `Garmin Watch (ConnectIQ DataField, BLE)` -> `ESP32 control service` -> `Treadmill (FTMS/iFit Control)`
+   * The data field reads the structured workout's target pace and writes `SPEED <kmh>` to the bridge's `A6ED0001-…` control service — the same service the nRF52840 variant exposes, so one data field build works with either bridge.
+   * The `garmin_ctrl_app` Connect IQ app can also connect (outside activities) to list discovered treadmills and switch with `CONNECT <n>`.
 
-### nRF52840 ANT+ bridge (phone-free variant)
+### nRF52840 ANT+ bridge (both streams at once)
 
-The `boards/xiao-nrf52840` build replaces both hops with one device:
+The `boards/xiao-nrf52840` build runs both streams simultaneously by moving the data stream off BLE:
 
 * **Forward**: `Treadmill (FTMS/iFit)` -> `nRF52840 (BLE Central)` -> **ANT+ SDM footpod** -> watch (native sensor, no BLE profile slot used).
 * **Reverse**: `Garmin DataField` -> `nRF52840 "TMILL-CTRL" (BLE)` -> treadmill — the workout target pace goes straight from the watch to the belt.

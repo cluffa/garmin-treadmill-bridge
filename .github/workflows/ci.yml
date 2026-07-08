@@ -80,71 +80,8 @@ jobs:
           name: garmin-ctrl-app-fenix8solar51mm
           path: ./garmin_ctrl_app/out/app.prg
 
-  build-android:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          cache: true
-      - uses: actions/cache@v4
-        with:
-          path: ~/.pub-cache
-          key: pub-${{ hashFiles('app/pubspec.lock') }}
-          restore-keys: pub-
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: gradle-${{ hashFiles('app/android/**/*.gradle*', 'app/android/gradle/wrapper/gradle-wrapper.properties') }}
-          restore-keys: gradle-
-      - run: flutter pub get
-        working-directory: app
-      - run: flutter build apk --release
-        working-directory: app
-      - uses: actions/upload-artifact@v4
-        with:
-          name: android-apk
-          path: app/build/app/outputs/flutter-apk/app-release.apk
-
-  build-ios:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          cache: true
-      - uses: actions/cache@v4
-        with:
-          path: ~/.pub-cache
-          key: pub-${{ hashFiles('app/pubspec.lock') }}
-          restore-keys: pub-
-      - uses: actions/cache@v4
-        with:
-          path: |
-            app/ios/Pods
-            ~/Library/Caches/CocoaPods
-          key: pods-${{ hashFiles('app/pubspec.lock') }}
-          restore-keys: pods-
-      - run: flutter pub get
-        working-directory: app
-      - run: flutter build ios --no-codesign --release
-        working-directory: app
-      - name: Package unsigned IPA
-        run: |
-          mkdir -p Payload
-          cp -r app/build/ios/iphoneos/Runner.app Payload/
-          zip -r app-unsigned.ipa Payload/
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ios-unsigned-ipa
-          path: app-unsigned.ipa
-
   release:
-    needs: [host-tests, build-heltec-v3, build-xiao-c6, build-garmin, build-android, build-ios]
+    needs: [host-tests, build-heltec-v3, build-xiao-c6, build-garmin]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:

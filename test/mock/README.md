@@ -52,6 +52,22 @@ Verified working: with the bridge flashed and an FTMS treadmill connected, this
 prints live RSC notifications end-to-end. Use it to confirm the peripheral side
 (advertising, GATT service, feature bits, subscribe, notify).
 
+## mock_ctrl_watch.py — stands in for the CIQ data field / ctrl app
+
+A BLE **central** that scans for the `A6ED0001-…` control service (ESP32 or
+nRF52840 bridge — same contract), connects, subscribes to the response
+characteristic, and decodes the compact `'D'/'E'/'S'` frames. Type commands on
+stdin (`STATUS`, `LIST`, `SCAN`, `CONNECT <n>`, `SPEED <kmh>`, `INCLINE <pct>`,
+`STOP`); they're written to the control characteristic uppercased.
+
+```sh
+./mock_ctrl_watch.py
+```
+
+Use it to exercise the watch control path without flashing the Garmin apps:
+the `'S'` greeting on subscribe, `LIST` replies, unsolicited `'S'` on
+treadmill link changes, and speed/incline dispatch.
+
 ## mock_treadmill.py — stands in for an FTMS treadmill
 
 A BLE **peripheral** advertising the Fitness Machine Service (0x1826) with a

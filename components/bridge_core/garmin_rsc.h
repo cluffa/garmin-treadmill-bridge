@@ -11,7 +11,7 @@ void garmin_rsc_set_addr_type(uint8_t addr_type);
 // task before nimble_port_run().
 void garmin_rsc_register_gatt(void);
 
-// No-op: advertising is now owned by nus_ctrl (single advertiser).
+// No-op: advertising is now owned by ctrl_svc (single advertiser).
 void garmin_rsc_start(void);
 
 void garmin_rsc_update(const treadmill_state_t *s);
@@ -19,9 +19,9 @@ void garmin_rsc_update(const treadmill_state_t *s);
 // Push battery state-of-charge (0..100 %) to the standard Battery Service.
 void garmin_rsc_update_battery(uint8_t pct);
 
-// Forward GAP events from the shared (nus_ctrl) GAP callback.
+// Forward GAP events from the shared (ctrl_svc) GAP callback.
 // garmin_rsc handles CONNECT, DISCONNECT, and SUBSCRIBE for its own handles.
 void garmin_rsc_on_gap_event(struct ble_gap_event *event);
 
 bool garmin_rsc_subscribed(void);
-bool garmin_rsc_advertising(void); /* always false; advertising owned by nus_ctrl */
+bool garmin_rsc_advertising(void); /* always false; advertising owned by ctrl_svc */

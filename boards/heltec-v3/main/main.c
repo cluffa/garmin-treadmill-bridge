@@ -9,7 +9,7 @@
 #include "ui.h"
 #include "machine.h"
 #include "garmin_rsc.h"
-#include "nus_ctrl.h"
+#include "ctrl_svc.h"
 #include "display.h"
 #include "serial_ctrl.h"
 
@@ -37,7 +37,7 @@ static void on_host_sync(void)
 
     machine_set_addr_type(own_addr_type);
     garmin_rsc_set_addr_type(own_addr_type);
-    nus_ctrl_set_addr_type(own_addr_type);
+    ctrl_svc_set_addr_type(own_addr_type);
 
     ui_start();
 }
@@ -50,7 +50,7 @@ static void nimble_host_task(void *param) {
     /* Register custom GATT services here — before the host starts — so they
      * land in the attribute table. */
     garmin_rsc_register_gatt();
-    nus_ctrl_register_gatt();
+    ctrl_svc_register_gatt();
     display_init();
     nimble_port_run();
     nimble_port_freertos_deinit();
