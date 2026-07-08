@@ -39,6 +39,7 @@ SRC_FILES += \
   $(CORE_DIR)/ftms_devlist.c \
   $(CORE_DIR)/connect_policy.c \
   $(CORE_DIR)/ctrl_frames.c \
+  $(CORE_DIR)/workout_ctrl.c \
 
 # SDK: startup + system
 SRC_FILES += \

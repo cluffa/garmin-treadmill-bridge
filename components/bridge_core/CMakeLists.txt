@@ -5,6 +5,7 @@ idf_component_register(
         "garmin_rsc.c" "ftms_devlist.c"
         "ctrl_dispatch.c" "serial_ctrl.c"
         "ctrl_svc.c" "ctrl_frames.c"
+        "workout_ctrl.c"
     INCLUDE_DIRS "."
     PRIV_REQUIRES
         bt nvs_flash
