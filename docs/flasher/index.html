@@ -126,6 +126,35 @@
 
     .unsupported, .not-allowed { display: block; font-size: .8rem; color: var(--red); margin-top: .5rem; }
 
+    /* --- watch app upload --- */
+    h1.second { transform: rotate(.8deg); }
+    .filepick {
+      display: inline-block;
+      font-size: .85rem;
+      color: var(--faint);
+      border: 2px dashed var(--ink);
+      border-radius: 10px 8px 11px 9px / 9px 11px 8px 10px;
+      padding: .5rem .9rem;
+      margin: 0 0 .9rem;
+      cursor: pointer;
+      background: transparent;
+    }
+    .filepick input { display: none; }
+    .filepick.has-file { color: var(--ink); border-style: solid; border-color: var(--blue); }
+    button.flash:disabled { opacity: .4; cursor: not-allowed; box-shadow: 2px 3px 0 rgba(33,48,59,.28); transform: none; }
+    .log {
+      margin: 1rem 0 .3rem;
+      padding: .7rem .8rem;
+      font-size: .76rem;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: rgba(47,111,149,.07);
+      border-left: 3px solid var(--blue);
+      border-radius: 4px;
+    }
+    .log.err { color: var(--red); border-left-color: var(--red); background: rgba(194,90,74,.08); }
+
     a { color: var(--blue); }
     footer {
       margin-top: 2.5rem;
@@ -196,6 +225,37 @@
       serial — it can't be done from the browser. See <code>CLAUDE.md</code> for the build.
     </p>
 
+    <!-- ── the watch side ─────────────────────────────────────────── -->
+    <h1 class="second" style="margin-top:2.5rem">…&amp; the <span class="pen">watch</span></h1>
+    <p class="tagline">
+      Sideload the Connect IQ app straight onto the watch over USB — the data
+      field or the treadmill picker, dropped into <code>GARMIN/Apps</code> for you.
+      Grab a <code>.prg</code> from the
+      <a href="https://github.com/cluffa/garmin-treadmill-bridge/releases/tag/nightly">nightly release</a>,
+      plug the watch in, let it show up as a drive, then:
+    </p>
+
+    <section class="card">
+      <h2>Install a <code>.prg</code></h2>
+      <span class="chip">Garmin · MTP over USB</span>
+      <p>Pick the app file, then send it. Works from the same browser tab — no cables to the terminal.</p>
+
+      <label class="filepick">
+        <input type="file" id="prg" accept=".prg,.PRG">
+        <span id="prg-label">choose a .prg…</span>
+      </label>
+
+      <div>
+        <button class="flash" id="install" disabled>➜ Send to watch</button>
+      </div>
+
+      <pre id="log" class="log" hidden></pre>
+      <p class="note quiet" id="mtp-hint">
+        Chrome/Edge on desktop only. The watch must be plugged in and mounted as a
+        drive (MTP mode) — and <b>not</b> held open by Garmin Express or Android File Transfer.
+      </p>
+    </section>
+
     <div class="steps">
       <b>if it won't connect…</b>
       <ol>
@@ -209,8 +269,57 @@
     <footer>
       firmware &amp; source →
       <a href="https://github.com/cluffa/garmin-treadmill-bridge">cluffa/garmin-treadmill-bridge</a><br>
-      flashing handled by <a href="https://esphome.github.io/esp-web-tools/">esp-web-tools</a>.
+      flashing handled by <a href="https://esphome.github.io/esp-web-tools/">esp-web-tools</a>;
+      watch upload by a forked <a href="https://github.com/tidepool-org/webmtp">webmtp</a> (WebUSB).
     </footer>
   </main>
+
+  <script type="module">
+    import { requestGarminDevice, installPrg } from './mtp.js';
+
+    const fileInput = document.getElementById('prg');
+    const fileLabel = document.getElementById('prg-label');
+    const pick      = fileInput.closest('.filepick');
+    const installBtn = document.getElementById('install');
+    const log = document.getElementById('log');
+
+    let chosen = null;
+
+    // No WebUSB → say so and disable the whole thing.
+    if (!navigator.usb) {
+      document.getElementById('mtp-hint').innerHTML =
+        "This browser can't do WebUSB — use desktop <b>Chrome</b> or <b>Edge</b> to install watch apps.";
+    }
+
+    fileInput.addEventListener('change', () => {
+      chosen = fileInput.files[0] || null;
+      fileLabel.textContent = chosen ? chosen.name : 'choose a .prg…';
+      pick.classList.toggle('has-file', !!chosen);
+      installBtn.disabled = !chosen || !navigator.usb;
+    });
+
+    function say(msg, isErr) {
+      log.hidden = false;
+      log.classList.toggle('err', !!isErr);
+      log.textContent += (log.textContent ? '\n' : '') + msg;
+    }
+
+    installBtn.addEventListener('click', async () => {
+      if (!chosen) return;
+      log.textContent = '';
+      log.classList.remove('err');
+      installBtn.disabled = true;
+      try {
+        // requestDevice must be the first await after the click gesture.
+        const device = await requestGarminDevice();
+        await installPrg(device, chosen, (m) => say(m));
+      } catch (e) {
+        say(e && e.message ? e.message : String(e), true);
+        say('If it stalled: unplug/replug the watch, close Garmin Express, and make sure it is in MTP (file transfer) mode.', true);
+      } finally {
+        installBtn.disabled = !chosen;
+      }
+    });
+  </script>
 </body>
 </html>

@@ -125,6 +125,14 @@ release assets, so the page always serves the latest firmware with no rebuild.
 - nRF52840 is SWD-only — deliberately not offered on the page.
 - Needs Pages enabled with **source = GitHub Actions** in repo settings.
 
+The same page also **sideloads a Connect IQ `.prg` to the watch over MTP**
+(`docs/flasher/mtp.js`), the browser twin of `tools/mtp_send_to_folder.c`:
+find `GARMIN/Apps`, `SendObjectInfo` + `SendObject`. `mtp.js` is a fork of
+tidepool-org/webmtp (BSD-2, read-only) with the write path added. It uses
+**WebUSB**, so it needs an OS that doesn't claim the MTP interface — macOS
+works, most Linux after unmounting, Windows generally won't. `requestDevice`
+must be the first `await` after the click gesture or the browser rejects it.
+
 ## Tools
 
 ### `tools/serial_cli.py` — serial command interface
