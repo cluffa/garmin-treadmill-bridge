@@ -131,7 +131,15 @@ find `GARMIN/Apps`, `SendObjectInfo` + `SendObject`. `mtp.js` is a fork of
 tidepool-org/webmtp (BSD-2, read-only) with the write path added. It uses
 **WebUSB**, so it needs an OS that doesn't claim the MTP interface — macOS
 works, most Linux after unmounting, Windows generally won't. `requestDevice`
-must be the first `await` after the click gesture or the browser rejects it.
+must be the first `await` after the click gesture or the browser rejects it
+(so the app is fetched from the release *after* the device is picked, not before).
+
+- The install buttons `fetch` the `.prg` straight from the fixed `nightly`-tag
+  release, same as the ESP manifests. This only works because the two Garmin
+  build artifacts have **distinct filenames** (`garmin-datafield-…prg`,
+  `garmin-ctrlapp-…prg`): the release job merges all artifacts into one dir,
+  so if both apps were emitted as `app.prg` one would clobber the other. Keep
+  the per-app `outputPath` names unique in `ci.yml`.
 
 ## Tools
 

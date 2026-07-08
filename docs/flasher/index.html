@@ -128,6 +128,11 @@
 
     /* --- watch app upload --- */
     h1.second { transform: rotate(.8deg); }
+    .btnrow { display: flex; flex-wrap: wrap; gap: .6rem; margin-bottom: .3rem; }
+    details.own { margin: 1rem 0 .2rem; font-size: .85rem; color: var(--faint); }
+    details.own summary { cursor: pointer; width: fit-content; }
+    details.own[open] summary { margin-bottom: .7rem; }
+    details.own .filepick { display: block; width: fit-content; }
     .filepick {
       display: inline-block;
       font-size: .85rem;
@@ -228,31 +233,39 @@
     <!-- ── the watch side ─────────────────────────────────────────── -->
     <h1 class="second" style="margin-top:2.5rem">…&amp; the <span class="pen">watch</span></h1>
     <p class="tagline">
-      Sideload the Connect IQ app straight onto the watch over USB — the data
-      field or the treadmill picker, dropped into <code>GARMIN/Apps</code> for you.
-      Grab a <code>.prg</code> from the
-      <a href="https://github.com/cluffa/garmin-treadmill-bridge/releases/tag/nightly">nightly release</a>,
-      plug the watch in, let it show up as a drive, then:
+      Sideload the Connect IQ app straight onto the watch over USB — the latest
+      build is pulled from the <a href="https://github.com/cluffa/garmin-treadmill-bridge/releases/tag/nightly">nightly release</a>
+      and dropped into <code>GARMIN/Apps</code> for you. Plug the watch in, let it
+      show up as a drive, then pick one:
     </p>
 
     <section class="card">
-      <h2>Install a <code>.prg</code></h2>
-      <span class="chip">Garmin · MTP over USB</span>
-      <p>Pick the app file, then send it. Works from the same browser tab — no cables to the terminal.</p>
+      <h2>Install the latest app</h2>
+      <span class="chip">Garmin · MTP over USB · fenix8solar51mm</span>
+      <p>
+        <b>Data field</b> drives the belt from a workout's target pace.
+        <b>Picker</b> lists treadmills and switches between them (outside activities).
+      </p>
 
-      <label class="filepick">
-        <input type="file" id="prg" accept=".prg,.PRG">
-        <span id="prg-label">choose a .prg…</span>
-      </label>
-
-      <div>
-        <button class="flash" id="install" disabled>➜ Send to watch</button>
+      <div class="btnrow">
+        <button class="flash" data-asset="garmin-datafield-fenix8solar51mm.prg">➜ Install data field</button>
+        <button class="flash" data-asset="garmin-ctrlapp-fenix8solar51mm.prg">➜ Install picker</button>
       </div>
+
+      <details class="own">
+        <summary>or send your own <code>.prg</code></summary>
+        <label class="filepick">
+          <input type="file" id="prg" accept=".prg,.PRG">
+          <span id="prg-label">choose a .prg…</span>
+        </label>
+        <button class="flash" id="install" disabled>➜ Send to watch</button>
+      </details>
 
       <pre id="log" class="log" hidden></pre>
       <p class="note quiet" id="mtp-hint">
         Chrome/Edge on desktop only. The watch must be plugged in and mounted as a
         drive (MTP mode) — and <b>not</b> held open by Garmin Express or Android File Transfer.
+        The prebuilt apps target <b>fenix8solar51mm</b>; other watches need a self-built <code>.prg</code>.
       </p>
     </section>
 
@@ -277,18 +290,23 @@
   <script type="module">
     import { requestGarminDevice, installPrg } from './mtp.js';
 
-    const fileInput = document.getElementById('prg');
-    const fileLabel = document.getElementById('prg-label');
-    const pick      = fileInput.closest('.filepick');
+    const RELEASE = 'https://github.com/cluffa/garmin-treadmill-bridge/releases/download/nightly/';
+
+    const fileInput  = document.getElementById('prg');
+    const fileLabel  = document.getElementById('prg-label');
+    const pick       = fileInput.closest('.filepick');
     const installBtn = document.getElementById('install');
-    const log = document.getElementById('log');
+    const assetBtns  = [...document.querySelectorAll('button[data-asset]')];
+    const allBtns    = [...assetBtns, installBtn];
+    const log        = document.getElementById('log');
 
     let chosen = null;
 
-    // No WebUSB → say so and disable the whole thing.
+    // No WebUSB → say so and disable everything.
     if (!navigator.usb) {
       document.getElementById('mtp-hint').innerHTML =
         "This browser can't do WebUSB — use desktop <b>Chrome</b> or <b>Edge</b> to install watch apps.";
+      allBtns.forEach((b) => { b.disabled = true; });
     }
 
     fileInput.addEventListener('change', () => {
@@ -304,21 +322,37 @@
       log.textContent += (log.textContent ? '\n' : '') + msg;
     }
 
-    installBtn.addEventListener('click', async () => {
-      if (!chosen) return;
+    // fileProvider returns a File; it runs *after* the device picker so the
+    // click's user gesture isn't consumed by a fetch before requestDevice().
+    async function run(fileProvider) {
+      if (!navigator.usb) return;
       log.textContent = '';
       log.classList.remove('err');
-      installBtn.disabled = true;
+      allBtns.forEach((b) => { b.disabled = true; });
       try {
-        // requestDevice must be the first await after the click gesture.
-        const device = await requestGarminDevice();
-        await installPrg(device, chosen, (m) => say(m));
+        const device = await requestGarminDevice();   // first await after click
+        const file = await fileProvider();
+        await installPrg(device, file, say);
       } catch (e) {
         say(e && e.message ? e.message : String(e), true);
         say('If it stalled: unplug/replug the watch, close Garmin Express, and make sure it is in MTP (file transfer) mode.', true);
       } finally {
+        assetBtns.forEach((b) => { b.disabled = false; });
         installBtn.disabled = !chosen;
       }
+    }
+
+    assetBtns.forEach((btn) => btn.addEventListener('click', () => run(async () => {
+      const name = btn.dataset.asset;
+      say(`Downloading ${name} from the latest release…`);
+      const res = await fetch(RELEASE + name, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`Couldn't download ${name} (HTTP ${res.status}). Is there a nightly release yet?`);
+      return new File([await res.arrayBuffer()], name);
+    })));
+
+    installBtn.addEventListener('click', () => {
+      if (!chosen) return;
+      run(async () => chosen);
     });
   </script>
 </body>
