@@ -63,10 +63,12 @@ merged firmware image straight to the chip. Source for the page lives in
 `docs/flasher/`. The nRF52840 variant isn't web-flashable (SWD only).
 
 The same page can also **sideload the Connect IQ app to the watch** over USB
-(WebUSB/MTP) — pick a `.prg`, plug the watch in, and it lands in `GARMIN/Apps`.
-The MTP client (`docs/flasher/mtp.js`) is a fork of
-[webmtp](https://github.com/tidepool-org/webmtp) with an upload path added; it
-works where the OS doesn't claim the MTP interface (macOS, most Linux).
+(WebUSB/MTP) — plug the watch in and click *Install data field* / *Install
+picker*; the latest `.prg` is fetched from the nightly release and dropped into
+`GARMIN/Apps` (or send your own `.prg`). The MTP client (`docs/flasher/mtp.js`)
+is a fork of [webmtp](https://github.com/tidepool-org/webmtp) with an upload
+path added; it works where the OS doesn't claim the MTP interface (macOS, most
+Linux). Prebuilt apps target `fenix8solar51mm`.
 
 ## Build
 

@@ -76,23 +76,25 @@ jobs:
         with:
           projectJungle: ./garmin_data_field/monkey.jungle
           developerKey: ./developer_key.der
-          outputPath: ./garmin_data_field/out/app.prg
+          # Distinct filename per app — the release job merges all artifacts into
+          # one dir, so two files both named app.prg would clobber each other.
+          outputPath: ./garmin-datafield-fenix8solar51mm.prg
           device: fenix8solar51mm
       - uses: actions/upload-artifact@v4
         with:
           name: garmin-data-field-fenix8solar51mm
-          path: ./garmin_data_field/out/app.prg
+          path: ./garmin-datafield-fenix8solar51mm.prg
       - name: Build Garmin Ctrl App
         uses: blackshadev/garmin-connectiq-build-action@9.1.0
         with:
           projectJungle: ./garmin_ctrl_app/monkey.jungle
           developerKey: ./developer_key.der
-          outputPath: ./garmin_ctrl_app/out/app.prg
+          outputPath: ./garmin-ctrlapp-fenix8solar51mm.prg
           device: fenix8solar51mm
       - uses: actions/upload-artifact@v4
         with:
           name: garmin-ctrl-app-fenix8solar51mm
-          path: ./garmin_ctrl_app/out/app.prg
+          path: ./garmin-ctrlapp-fenix8solar51mm.prg
 
   release:
     needs: [host-tests, build-heltec-v3, build-xiao-c6, build-garmin]
