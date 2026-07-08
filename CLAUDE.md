@@ -183,8 +183,11 @@ protocol is connecting/connected. **Do not reintroduce simultaneous connections.
 The ESP32 exposes one GATT server with both the RSC sensor (0x1814) and the
 watch control service (`A6ED0001-…`, same UUIDs/grammar as the nRF bridge —
 `ctrl_svc.c` is a NimBLE port of `platform_ble_ctrl_svc.c`). The single
-advertisement (owned by `ctrl_svc.c`) carries the A6ED 128-bit UUID in the
-primary packet and RSC 0x1814 + name in the scan response. The watch holds
+advertisement (owned by `ctrl_svc.c`) carries RSC 0x1814 + name in the
+primary packet and the A6ED 128-bit UUID in the scan response — CIQ's
+`ScanResult.getServiceUuids()` only surfaces scan-response UUIDs, so the
+A6ED UUID must live there or the watch apps never find the bridge (issue
+#15); all three fields don't fit one 31-byte packet. The watch holds
 one link to the bridge, so the two modes are mutually exclusive; whichever
 watch feature connects first wins. To use control mode, disable/unpair the
 RSC sensor on the watch or it grabs the connection.
