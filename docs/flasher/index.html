@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Flash · Garmin Treadmill Bridge</title>
+  <meta name="description" content="Flash the latest firmware onto your ESP32 treadmill bridge, straight from the browser.">
+
+  <!-- ESP Web Tools: the package that does the actual flashing over Web Serial -->
+  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+
+  <!-- a hand-drawn feeling heading font -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&display=swap" rel="stylesheet">
+
+  <style>
+    /* --- paper --- */
+    :root {
+      --ink:   #21303b;
+      --faint: #66798a;
+      --paper: #fbf9f2;
+      --line:  #d7e3ea;
+      --blue:  #2f6f95;
+      --red:   #c25a4a;
+    }
+    * { box-sizing: border-box; }
+    html { -webkit-text-size-adjust: 100%; }
+    body {
+      margin: 0;
+      font-family: "SF Mono", "JetBrains Mono", "Fira Mono", ui-monospace, Menlo, Consolas, monospace;
+      color: var(--ink);
+      background-color: var(--paper);
+      /* faint graph paper */
+      background-image:
+        linear-gradient(var(--line) 1px, transparent 1px),
+        linear-gradient(90deg, var(--line) 1px, transparent 1px);
+      background-size: 26px 26px;
+      line-height: 1.6;
+    }
+    .sheet {
+      max-width: 640px;
+      margin: 0 auto;
+      padding: 2.5rem 1.25rem 4rem;
+    }
+
+    h1 {
+      font-family: "Caveat", cursive;
+      font-size: clamp(2.6rem, 9vw, 3.8rem);
+      font-weight: 700;
+      line-height: 1.05;
+      margin: 0 0 .2rem;
+      color: var(--ink);
+      transform: rotate(-1.2deg);
+    }
+    h1 .pen { color: var(--blue); }
+    .tagline {
+      color: var(--faint);
+      margin: 0 0 2rem;
+      font-size: .9rem;
+    }
+
+    /* --- the little firmware cards --- */
+    .card {
+      background: #fff;
+      border: 2px solid var(--ink);
+      border-radius: 14px 12px 13px 11px / 12px 14px 11px 13px; /* wobbly, hand-drawn */
+      box-shadow: 4px 5px 0 rgba(33,48,59,.14);
+      padding: 1.1rem 1.25rem 1.35rem;
+      margin: 0 0 1.75rem;
+    }
+    .card:nth-child(even) { transform: rotate(.5deg); }
+    .card h2 {
+      font-family: "Caveat", cursive;
+      font-size: 1.9rem;
+      font-weight: 700;
+      margin: 0 0 .1rem;
+    }
+    .chip {
+      display: inline-block;
+      font-size: .72rem;
+      letter-spacing: .04em;
+      color: var(--blue);
+      border: 1.5px dashed var(--blue);
+      border-radius: 20px;
+      padding: .05rem .55rem;
+      margin-bottom: .7rem;
+    }
+    .card p { font-size: .85rem; color: var(--faint); margin: .35rem 0 1rem; }
+
+    /* the button we slot into esp-web-install-button */
+    button.flash {
+      font-family: inherit;
+      font-size: .95rem;
+      font-weight: 600;
+      color: #fff;
+      background: var(--blue);
+      border: 2px solid var(--ink);
+      border-radius: 9px 8px 10px 7px / 8px 10px 7px 9px;
+      box-shadow: 2px 3px 0 rgba(33,48,59,.28);
+      padding: .55rem 1.1rem;
+      cursor: pointer;
+      transition: transform .06s ease, box-shadow .06s ease;
+    }
+    button.flash:hover  { transform: translate(-1px,-1px); box-shadow: 3px 4px 0 rgba(33,48,59,.28); }
+    button.flash:active { transform: translate(1px,2px);  box-shadow: 1px 1px 0 rgba(33,48,59,.28); }
+
+    .note {
+      font-size: .78rem;
+      color: var(--red);
+      margin-top: .6rem;
+    }
+    .note.quiet { color: var(--faint); }
+
+    /* --- how-to + footer --- */
+    .steps {
+      border-left: 3px solid var(--line);
+      padding-left: 1rem;
+      margin: 2.25rem 0;
+      font-size: .82rem;
+      color: var(--faint);
+    }
+    .steps b { color: var(--ink); }
+    .steps ol { margin: .4rem 0 0; padding-left: 1.2rem; }
+    .steps li { margin: .25rem 0; }
+
+    .unsupported, .not-allowed { display: block; font-size: .8rem; color: var(--red); margin-top: .5rem; }
+
+    a { color: var(--blue); }
+    footer {
+      margin-top: 2.5rem;
+      font-size: .78rem;
+      color: var(--faint);
+      border-top: 1.5px dashed var(--line);
+      padding-top: 1rem;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --ink:   #e7eef3;
+        --faint: #93a6b3;
+        --paper: #141b21;
+        --line:  #26333d;
+        --blue:  #6fb6dd;
+        --red:   #e08a7c;
+      }
+      body { background-color: var(--paper); }
+      .card { background: #1b242c; box-shadow: 4px 5px 0 rgba(0,0,0,.35); }
+      button.flash { color: #0f1519; box-shadow: 2px 3px 0 rgba(0,0,0,.5); }
+    }
+  </style>
+</head>
+<body>
+  <main class="sheet">
+    <h1>flash the <span class="pen">bridge</span></h1>
+    <p class="tagline">
+      Plug your ESP32 into USB, pick your board, hit flash. The firmware is pulled
+      live from the latest <a href="https://github.com/cluffa/garmin-treadmill-bridge/releases/tag/nightly">nightly release</a>.
+      No IDF, no esptool, no cables to the terminal — just the browser.
+    </p>
+
+    <!-- Heltec WiFi LoRa 32 v3 -->
+    <section class="card">
+      <h2>Heltec WiFi LoRa 32 v3</h2>
+      <span class="chip">ESP32-S3 · OLED + battery</span>
+      <p>The board with the little screen and battery management.</p>
+      <esp-web-install-button manifest="./manifest-heltec-v3.json">
+        <button class="flash" slot="activate">⚡ Flash Heltec v3</button>
+        <span slot="unsupported" class="unsupported">
+          This browser can't talk to serial ports. Use desktop <b>Chrome</b> or <b>Edge</b>.
+        </span>
+        <span slot="not-allowed" class="not-allowed">
+          Flashing needs a secure (https) page — open this over https.
+        </span>
+      </esp-web-install-button>
+    </section>
+
+    <!-- Seeed XIAO ESP32-C6 -->
+    <section class="card">
+      <h2>XIAO ESP32-C6</h2>
+      <span class="chip">ESP32-C6 · compact, USB-C</span>
+      <p>The small one. Primary board for the bridge.</p>
+      <esp-web-install-button manifest="./manifest-xiao-c6.json">
+        <button class="flash" slot="activate">⚡ Flash XIAO C6</button>
+        <span slot="unsupported" class="unsupported">
+          This browser can't talk to serial ports. Use desktop <b>Chrome</b> or <b>Edge</b>.
+        </span>
+        <span slot="not-allowed" class="not-allowed">
+          Flashing needs a secure (https) page — open this over https.
+        </span>
+      </esp-web-install-button>
+    </section>
+
+    <p class="note quiet">
+      Got the <b>XIAO nRF52840</b> ANT+ variant? That one flashes over SWD, not USB
+      serial — it can't be done from the browser. See <code>CLAUDE.md</code> for the build.
+    </p>
+
+    <div class="steps">
+      <b>if it won't connect…</b>
+      <ol>
+        <li>Use Chrome or Edge on a desktop — Web Serial isn't in Safari / Firefox / mobile.</li>
+        <li>Close anything else holding the port (a serial monitor, <code>idf.py monitor</code>).</li>
+        <li>Some boards need the <b>BOOT</b> button held while plugging in to enter download mode.</li>
+        <li>Pick the right USB serial port in the popup (often labelled CP210x / JTAG / USB).</li>
+      </ol>
+    </div>
+
+    <footer>
+      firmware &amp; source →
+      <a href="https://github.com/cluffa/garmin-treadmill-bridge">cluffa/garmin-treadmill-bridge</a><br>
+      flashing handled by <a href="https://esphome.github.io/esp-web-tools/">esp-web-tools</a>.
+    </footer>
+  </main>
+</body>
+</html>

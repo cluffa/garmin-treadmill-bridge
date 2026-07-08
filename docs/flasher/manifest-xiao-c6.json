@@ -1,0 +1,16 @@
+{
+  "name": "Garmin Treadmill Bridge — XIAO ESP32-C6",
+  "version": "nightly",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32-C6",
+      "parts": [
+        {
+          "path": "https://github.com/cluffa/garmin-treadmill-bridge/releases/download/nightly/garmin-treadmill-bridge-xiao-c6-merged.bin",
+          "offset": 0
+        }
+      ]
+    }
+  ]
+}
