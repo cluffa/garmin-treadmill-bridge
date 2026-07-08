@@ -109,6 +109,22 @@ Gotchas:
   separate — a zeroed placeholder builds but Garmin watches won't hear the
   footpod; put the real thisisant.com key back after re-cloning.
 
+## Web flasher (`docs/flasher/`)
+
+Browser flashing for the ESP32 boards via [ESP Web Tools](https://esphome.github.io/esp-web-tools/)
+(Web Serial), deployed to GitHub Pages by `.github/workflows/pages.yml`. Static
+page + one manifest per board; the manifests point at fixed `nightly`-tag
+release assets, so the page always serves the latest firmware with no rebuild.
+
+- CI (`ci.yml`) produces a **merged full-flash image** per board
+  (`esptool merge_bin @flash_args`) alongside the plain app `.bin`, uploaded to
+  the `nightly` release as `…-<board>-merged.bin`. The manifests flash that at
+  **offset 0** (bootloader sits at 0x0 on both esp32s3 and esp32c6).
+- Only merged bins are web-flashable; the bare app `.bin` is missing the
+  bootloader/partition table. Keep the merge step if you touch the build jobs.
+- nRF52840 is SWD-only — deliberately not offered on the page.
+- Needs Pages enabled with **source = GitHub Actions** in repo settings.
+
 ## Tools
 
 ### `tools/serial_cli.py` — serial command interface

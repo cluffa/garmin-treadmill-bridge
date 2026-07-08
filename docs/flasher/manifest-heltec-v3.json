@@ -1,0 +1,16 @@
+{
+  "name": "Garmin Treadmill Bridge — Heltec v3",
+  "version": "nightly",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [
+        {
+          "path": "https://github.com/cluffa/garmin-treadmill-bridge/releases/download/nightly/garmin-treadmill-bridge-heltec-v3-merged.bin",
+          "offset": 0
+        }
+      ]
+    }
+  ]
+}

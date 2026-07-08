@@ -50,6 +50,18 @@ test/mock/                — Python mock treadmill and watch (macOS/Linux)
 tools/serial_cli.py       — interactive USB serial CLI for the device
 ```
 
+## Flash from your browser
+
+No toolchain needed for the ESP32 boards — open the flasher page in Chrome or
+Edge, plug the board into USB, and click flash:
+
+**→ https://cluffa.github.io/garmin-treadmill-bridge/**
+
+It uses [ESP Web Tools](https://esphome.github.io/esp-web-tools/) (Web Serial)
+to write the latest [`nightly`](https://github.com/cluffa/garmin-treadmill-bridge/releases/tag/nightly)
+merged firmware image straight to the chip. Source for the page lives in
+`docs/flasher/`. The nRF52840 variant isn't web-flashable (SWD only).
+
 ## Build
 
 Requires [ESP-IDF v5.4+](https://docs.espressif.com/projects/esp-idf/en/stable/esp32/get-started/).

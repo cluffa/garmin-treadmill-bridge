@@ -27,10 +27,17 @@ jobs:
           target: esp32s3
           path: boards/heltec-v3
       - run: cp boards/heltec-v3/build/garmin-treadmill-bridge.bin garmin-treadmill-bridge-heltec-v3.bin
+      - name: Merge full-flash image for web flashing
+        run: |
+          pip install --quiet "esptool==4.8.1"
+          ( cd boards/heltec-v3/build && esptool.py --chip esp32s3 merge_bin \
+              -o "$GITHUB_WORKSPACE/garmin-treadmill-bridge-heltec-v3-merged.bin" @flash_args )
       - uses: actions/upload-artifact@v4
         with:
           name: firmware-heltec-v3
-          path: garmin-treadmill-bridge-heltec-v3.bin
+          path: |
+            garmin-treadmill-bridge-heltec-v3.bin
+            garmin-treadmill-bridge-heltec-v3-merged.bin
 
   build-xiao-c6:
     runs-on: ubuntu-latest
@@ -46,10 +53,17 @@ jobs:
           target: esp32c6
           path: boards/xiao-c6
       - run: cp boards/xiao-c6/build/garmin-treadmill-bridge.bin garmin-treadmill-bridge-xiao-c6.bin
+      - name: Merge full-flash image for web flashing
+        run: |
+          pip install --quiet "esptool==4.8.1"
+          ( cd boards/xiao-c6/build && esptool.py --chip esp32c6 merge_bin \
+              -o "$GITHUB_WORKSPACE/garmin-treadmill-bridge-xiao-c6-merged.bin" @flash_args )
       - uses: actions/upload-artifact@v4
         with:
           name: firmware-xiao-c6
-          path: garmin-treadmill-bridge-xiao-c6.bin
+          path: |
+            garmin-treadmill-bridge-xiao-c6.bin
+            garmin-treadmill-bridge-xiao-c6-merged.bin
 
   build-garmin:
     runs-on: ubuntu-latest
