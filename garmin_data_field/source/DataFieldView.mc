@@ -40,11 +40,6 @@ class DataFieldView extends WatchUi.DataField {
         mTimerState = Activity.TIMER_STATE_OFF;
     }
 
-    // Let the App's onStart() patch us up when it runs after getInitialView().
-    function setBle(ble as CtrlBleDelegate or Null) as Void {
-        mBle = ble;
-    }
-
     function onLayout(dc as Dc) as Void {
     }
 
@@ -78,20 +73,26 @@ class DataFieldView extends WatchUi.DataField {
         return n;
     }
 
+    // No-step frame: version + timer state, sentinel 0xFF for the
+    // intensity/targetType/durationType fields, flags clear.
+    hidden function _newBaseFrame(timerState as Number) as ByteArray {
+        var f = new [FRAME_LEN]b;
+        for (var i = 0; i < FRAME_LEN; i++) { f[i] = 0; }
+        f[0] = FRAME_VERSION;
+        f[1] = timerState & 0xFF;
+        f[3] = 0xFF; // intensity: invalid until known
+        f[4] = 0xFF; // targetType: invalid until known
+        f[9] = 0xFF; // durationType: invalid until known
+        return f;
+    }
+
     // Build the 15-byte telemetry frame for the given timer state.  Wrapped
     // so that an error reading the workout step never crashes the data field.
     hidden function _packFrame(timerState as Number) as ByteArray {
+        mHasSpeedTarget = false;
+        mTargetKmh = 0.0f;
         try {
-            var f = new [FRAME_LEN]b;
-            for (var i = 0; i < FRAME_LEN; i++) { f[i] = 0; }
-            f[0] = FRAME_VERSION;
-            f[1] = timerState & 0xFF;
-            f[3] = 0xFF; // intensity: invalid until known
-            f[4] = 0xFF; // targetType: invalid until known
-            f[9] = 0xFF; // durationType: invalid until known
-
-            mHasSpeedTarget = false;
-            mTargetKmh = 0.0f;
+            var f = _newBaseFrame(timerState);
 
             var info = Activity.getCurrentWorkoutStep();
             if (info == null) { return f; }
@@ -143,16 +144,10 @@ class DataFieldView extends WatchUi.DataField {
             System.println("DataFieldView _packFrame error: " + e.getErrorMessage());
             mHasSpeedTarget = false;
             mTargetKmh = 0.0f;
+            // Fallback: discard the partially-built frame, send a clean
+            // no-step frame instead.
+            return _newBaseFrame(timerState);
         }
-        // Fallback: minimal valid frame with no-step sentinel values.
-        var fb = new [FRAME_LEN]b;
-        for (var j = 0; j < FRAME_LEN; j++) { fb[j] = 0; }
-        fb[0] = FRAME_VERSION;
-        fb[1] = timerState & 0xFF;
-        fb[3] = 0xFF;
-        fb[4] = 0xFF;
-        fb[9] = 0xFF;
-        return fb;
     }
 
     hidden function _bytesEqual(a as ByteArray, b as ByteArray or Null) as Boolean {
@@ -164,12 +159,18 @@ class DataFieldView extends WatchUi.DataField {
     }
 
     // Send the frame if it changed (or force it, for a timer transition). Only
-    // latches it as sent when the write was actually issued.
+    // latches it as sent when the write was actually issued.  This is the
+    // single catch boundary for the BLE send path, so the onTimer* force
+    // pushes are protected the same as the 1 Hz compute() sends.
     hidden function _maybeSend(frame as ByteArray, force as Boolean) as Void {
-        if (mBle == null || !mBle.isConnected()) { return; }
-        if (!force && _bytesEqual(frame, mLastFrame)) { return; }
-        if (mBle.writeWorkoutFrame(frame)) {
-            mLastFrame = frame;
+        try {
+            if (mBle == null || !mBle.isConnected()) { return; }
+            if (!force && _bytesEqual(frame, mLastFrame)) { return; }
+            if (mBle.writeWorkoutFrame(frame)) {
+                mLastFrame = frame;
+            }
+        } catch (e) {
+            System.println("DataFieldView send error: " + e.getErrorMessage());
         }
     }
 
@@ -178,14 +179,12 @@ class DataFieldView extends WatchUi.DataField {
         _maybeSend(_packFrame(timerState), true);
     }
 
+    // No try/catch needed here: _packFrame and _maybeSend each catch
+    // internally, and the timerState read is has/null-guarded.
     function compute(info as Activity.Info) as Void {
-        try {
-            mTimerState = (info has :timerState) && info.timerState != null
-                ? info.timerState : Activity.TIMER_STATE_OFF;
-            _maybeSend(_packFrame(mTimerState), false);
-        } catch (e) {
-            System.println("DataFieldView compute error: " + e.getErrorMessage());
-        }
+        mTimerState = (info has :timerState) && info.timerState != null
+            ? info.timerState : Activity.TIMER_STATE_OFF;
+        _maybeSend(_packFrame(mTimerState), false);
     }
 
     // Timer transitions push immediately so pause stops the belt and resume

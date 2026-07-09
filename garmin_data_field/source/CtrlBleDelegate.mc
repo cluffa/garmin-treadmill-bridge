@@ -140,11 +140,11 @@ class CtrlBleDelegate extends BluetoothLowEnergy.BleDelegate {
     // frame as "sent" until it succeeds.
     function writeWorkoutFrame(frame as ByteArray) as Boolean {
         if (mDevice == null || mWritePending) { return false; }
-        var svc = mDevice.getService(CTRL_SVC_UUID);
-        if (svc == null) { return false; }
-        var ch = svc.getCharacteristic(CTRL_WKT_UUID);
-        if (ch == null) { return false; }
         try {
+            var svc = mDevice.getService(CTRL_SVC_UUID);
+            if (svc == null) { return false; }
+            var ch = svc.getCharacteristic(CTRL_WKT_UUID);
+            if (ch == null) { return false; }
             ch.requestWrite(frame,
                             {:writeType => BluetoothLowEnergy.WRITE_TYPE_DEFAULT});
             mWritePending = true;

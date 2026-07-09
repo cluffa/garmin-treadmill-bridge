@@ -10,16 +10,16 @@ class DataFieldApp extends Application.AppBase {
 
     function initialize() {
         AppBase.initialize();
+        // Created here (not onStart) because some watches call
+        // getInitialView() before onStart(); the constructor always runs
+        // first, so the view gets a live delegate either way.
+        mBle = new CtrlBleDelegate();
     }
 
     function onStart(state as Dictionary?) as Void {
-        mBle = new CtrlBleDelegate();
-        BluetoothLowEnergy.setDelegate(mBle);
-        mBle.registerProfile();   // scan starts from onProfileRegister
-        // On some watches getInitialView() runs before onStart(), so the view
-        // was created with mBle == null.  Patch it up now.
-        if (mView != null) {
-            mView.setBle(mBle);
+        if (mBle != null) {
+            BluetoothLowEnergy.setDelegate(mBle);
+            mBle.registerProfile();   // scan starts from onProfileRegister
         }
     }
 
