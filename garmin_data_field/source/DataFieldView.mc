@@ -30,6 +30,7 @@ class DataFieldView extends WatchUi.DataField {
     hidden var mTargetKmh as Float;             // resolved speed target, for display
     hidden var mHasSpeedTarget as Boolean;
     hidden var mTimerState as Number;
+    hidden var mLastInfo as Activity.Info or Null;  // cached from compute() for fallback
 
     function initialize(ble as CtrlBleDelegate or Null) {
         DataField.initialize();
@@ -38,6 +39,7 @@ class DataFieldView extends WatchUi.DataField {
         mTargetKmh = 0.0f;
         mHasSpeedTarget = false;
         mTimerState = Activity.TIMER_STATE_OFF;
+        mLastInfo = null;
     }
 
     function onLayout(dc as Dc) as Void {
@@ -87,10 +89,9 @@ class DataFieldView extends WatchUi.DataField {
     }
 
     // Build the 15-byte telemetry frame for the given timer state.
-    // Follows the proven pattern from main: access the step via
-    // WorkoutStepInfo.step, then read the target directly.  The old code
-    // showed this works on the fenix 8; the previous multi-level "portion"
-    // path broke when WorkoutIntervalStep wasn't available at runtime.
+    // Tries module-level getCurrentWorkoutStep() first; falls back to
+    // info.currentWorkoutStep from the compute() callback if the module
+    // function returns null (seen on some CIQ System 8 builds).
     hidden function _packFrame(timerState as Number) as ByteArray {
         var f = _newBaseFrame(timerState);
 
@@ -99,13 +100,16 @@ class DataFieldView extends WatchUi.DataField {
 
         try {
             var wStep = Activity.getCurrentWorkoutStep();
+            // Fallback: try the Activity.Info field from the last compute() call.
+            if (wStep == null && mLastInfo != null) {
+                wStep = (mLastInfo has :currentWorkoutStep)
+                    ? mLastInfo.currentWorkoutStep : null;
+            }
             if (wStep == null) { return f; }
             if ((wStep has :intensity) && wStep.intensity != null) {
                 f[3] = wStep.intensity & 0xFF;
             }
-            // The old code always replaces wStep with its inner step when
-            // available; that correctly drills through to the WorkoutStep
-            // (interval or plain).
+            // Drill through to the inner WorkoutStep when available.
             if ((wStep has :step) && wStep.step != null) {
                 wStep = wStep.step;
             }
@@ -138,7 +142,7 @@ class DataFieldView extends WatchUi.DataField {
                 ? wStep.durationValue : 0;
             _u32(f, 10, dv);
 
-            // Stash the resolved speed for the display (mm/s midpoint → km/h).
+            // Stash the resolved speed for the display (mm/s midpoint -> km/h).
             var mmps = (low > 0 && high > 0) ? ((low + high) / 2) : (low > 0 ? low : high);
             if (mmps > 0) {
                 mHasSpeedTarget = true;
@@ -185,6 +189,7 @@ class DataFieldView extends WatchUi.DataField {
     // No try/catch needed here: _packFrame and _maybeSend each catch
     // internally, and the timerState read is has/null-guarded.
     function compute(info as Activity.Info) as Void {
+        mLastInfo = info;
         mTimerState = (info has :timerState) && info.timerState != null
             ? info.timerState : Activity.TIMER_STATE_OFF;
         _maybeSend(_packFrame(mTimerState), false);
