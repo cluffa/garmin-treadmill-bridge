@@ -16,6 +16,11 @@ class DataFieldApp extends Application.AppBase {
         mBle = new CtrlBleDelegate();
         BluetoothLowEnergy.setDelegate(mBle);
         mBle.registerProfile();   // scan starts from onProfileRegister
+        // On some watches getInitialView() runs before onStart(), so the view
+        // was created with mBle == null.  Patch it up now.
+        if (mView != null) {
+            mView.setBle(mBle);
+        }
     }
 
     function onStop(state as Dictionary?) as Void {

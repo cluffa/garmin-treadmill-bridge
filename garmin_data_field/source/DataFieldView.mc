@@ -40,6 +40,11 @@ class DataFieldView extends WatchUi.DataField {
         mTimerState = Activity.TIMER_STATE_OFF;
     }
 
+    // Let the App's onStart() patch us up when it runs after getInitialView().
+    function setBle(ble as CtrlBleDelegate or Null) as Void {
+        mBle = ble;
+    }
+
     function onLayout(dc as Dc) as Void {
     }
 
@@ -73,65 +78,81 @@ class DataFieldView extends WatchUi.DataField {
         return n;
     }
 
-    // Build the 15-byte telemetry frame for the given timer state.
+    // Build the 15-byte telemetry frame for the given timer state.  Wrapped
+    // so that an error reading the workout step never crashes the data field.
     hidden function _packFrame(timerState as Number) as ByteArray {
-        var f = new [FRAME_LEN]b;
-        for (var i = 0; i < FRAME_LEN; i++) { f[i] = 0; }
-        f[0] = FRAME_VERSION;
-        f[1] = timerState & 0xFF;
-        f[3] = 0xFF; // intensity: invalid until known
-        f[4] = 0xFF; // targetType: invalid until known
-        f[9] = 0xFF; // durationType: invalid until known
+        try {
+            var f = new [FRAME_LEN]b;
+            for (var i = 0; i < FRAME_LEN; i++) { f[i] = 0; }
+            f[0] = FRAME_VERSION;
+            f[1] = timerState & 0xFF;
+            f[3] = 0xFF; // intensity: invalid until known
+            f[4] = 0xFF; // targetType: invalid until known
+            f[9] = 0xFF; // durationType: invalid until known
 
-        mHasSpeedTarget = false;
-        mTargetKmh = 0.0f;
+            mHasSpeedTarget = false;
+            mTargetKmh = 0.0f;
 
-        var info = Activity.getCurrentWorkoutStep();
-        if (info == null) { return f; }
-        if ((info has :intensity) && info.intensity != null) {
-            f[3] = info.intensity & 0xFF;
-        }
-
-        var step = (info has :step) ? info.step : null;
-        if (step == null) { return f; }
-
-        // Resolve interval work/rest to the current portion; a plain step is
-        // itself the portion.
-        var portion = step;
-        if (step instanceof Activity.WorkoutIntervalStep) {
-            var isRest = (info has :intensity) &&
-                         info.intensity == Activity.WORKOUT_INTENSITY_REST;
-            portion = isRest ? step.restStep : step.activeStep;
-            if ((step has :repetitionNumber) && step.repetitionNumber != null) {
-                f[14] = step.repetitionNumber & 0xFF;
+            var info = Activity.getCurrentWorkoutStep();
+            if (info == null) { return f; }
+            if ((info has :intensity) && info.intensity != null) {
+                f[3] = info.intensity & 0xFF;
             }
-        }
-        if (portion == null) { return f; }
 
-        f[2] = 0x01; // has step
-        var tt = ((portion has :targetType) && portion.targetType != null)
-            ? portion.targetType : 0xFF;
-        f[4] = tt & 0xFF;
-        var low  = _targetToWire(tt, (portion has :targetValueLow)  ? portion.targetValueLow  : null);
-        var high = _targetToWire(tt, (portion has :targetValueHigh) ? portion.targetValueHigh : null);
-        _u16(f, 5, low);
-        _u16(f, 7, high);
-        if ((portion has :durationType) && portion.durationType != null) {
-            f[9] = portion.durationType & 0xFF;
-        }
-        var dv = ((portion has :durationValue) && portion.durationValue != null)
-            ? portion.durationValue : 0;
-        _u32(f, 10, dv);
+            var step = (info has :step) ? info.step : null;
+            if (step == null) { return f; }
 
-        // Stash the resolved speed for the display (mm/s midpoint → km/h).
-        if (tt == Activity.WORKOUT_STEP_TARGET_SPEED) {
-            var mmps = (low > 0 && high > 0) ? ((low + high) / 2) : (low > 0 ? low : high);
-            if (mmps > 0) {
-                mHasSpeedTarget = true;
-                mTargetKmh = mmps * 0.0036f;
+            // Resolve interval work/rest to the current portion; a plain step is
+            // itself the portion.
+            var portion = step;
+            if (step instanceof Activity.WorkoutIntervalStep) {
+                var isRest = (info has :intensity) &&
+                             info.intensity == Activity.WORKOUT_INTENSITY_REST;
+                portion = isRest ? step.restStep : step.activeStep;
+                if ((step has :repetitionNumber) && step.repetitionNumber != null) {
+                    f[14] = step.repetitionNumber & 0xFF;
+                }
             }
+            if (portion == null) { return f; }
+
+            f[2] = 0x01; // has step
+            var tt = ((portion has :targetType) && portion.targetType != null)
+                ? portion.targetType : 0xFF;
+            f[4] = tt & 0xFF;
+            var low  = _targetToWire(tt, (portion has :targetValueLow)  ? portion.targetValueLow  : null);
+            var high = _targetToWire(tt, (portion has :targetValueHigh) ? portion.targetValueHigh : null);
+            _u16(f, 5, low);
+            _u16(f, 7, high);
+            if ((portion has :durationType) && portion.durationType != null) {
+                f[9] = portion.durationType & 0xFF;
+            }
+            var dv = ((portion has :durationValue) && portion.durationValue != null)
+                ? portion.durationValue : 0;
+            _u32(f, 10, dv);
+
+            // Stash the resolved speed for the display (mm/s midpoint → km/h).
+            if (tt == Activity.WORKOUT_STEP_TARGET_SPEED) {
+                var mmps = (low > 0 && high > 0) ? ((low + high) / 2) : (low > 0 ? low : high);
+                if (mmps > 0) {
+                    mHasSpeedTarget = true;
+                    mTargetKmh = mmps * 0.0036f;
+                }
+            }
+            return f;
+        } catch (e) {
+            System.println("DataFieldView _packFrame error: " + e.getErrorMessage());
+            mHasSpeedTarget = false;
+            mTargetKmh = 0.0f;
         }
-        return f;
+        // Fallback: minimal valid frame with no-step sentinel values.
+        var fb = new [FRAME_LEN]b;
+        for (var j = 0; j < FRAME_LEN; j++) { fb[j] = 0; }
+        fb[0] = FRAME_VERSION;
+        fb[1] = timerState & 0xFF;
+        fb[3] = 0xFF;
+        fb[4] = 0xFF;
+        fb[9] = 0xFF;
+        return fb;
     }
 
     hidden function _bytesEqual(a as ByteArray, b as ByteArray or Null) as Boolean {
@@ -158,9 +179,13 @@ class DataFieldView extends WatchUi.DataField {
     }
 
     function compute(info as Activity.Info) as Void {
-        mTimerState = (info has :timerState) && info.timerState != null
-            ? info.timerState : Activity.TIMER_STATE_OFF;
-        _maybeSend(_packFrame(mTimerState), false);
+        try {
+            mTimerState = (info has :timerState) && info.timerState != null
+                ? info.timerState : Activity.TIMER_STATE_OFF;
+            _maybeSend(_packFrame(mTimerState), false);
+        } catch (e) {
+            System.println("DataFieldView compute error: " + e.getErrorMessage());
+        }
     }
 
     // Timer transitions push immediately so pause stops the belt and resume
