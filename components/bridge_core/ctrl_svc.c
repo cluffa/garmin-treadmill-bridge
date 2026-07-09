@@ -206,12 +206,22 @@ static int ctrl_wkt_access(uint16_t conn_handle,
 {
     (void)attr_handle; (void)arg;
     if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return 0;
-    if (conn_handle != s_conn) return BLE_ATT_ERR_UNLIKELY;
+    if (conn_handle != s_conn) {
+        ESP_LOGW(TAG, "wkt write from conn=%d, expected=%d — rejecting", conn_handle, s_conn);
+        return BLE_ATT_ERR_UNLIKELY;
+    }
 
     uint8_t buf[WORKOUT_FRAME_LEN];
     uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
     if (len > sizeof buf) len = sizeof buf;
     os_mbuf_copydata(ctxt->om, 0, len, buf);
+    ESP_LOGI(TAG, "wkt frame: ver=%d ts=%d fl=0x%02x int=%d tt=%d lo=%d hi=%d dur=%d dv=%u rep=%d",
+             buf[0], buf[1], buf[2], buf[3], buf[4],
+             (int)(buf[5] | (buf[6] << 8)),
+             (int)(buf[7] | (buf[8] << 8)),
+             buf[9],
+             (unsigned)(buf[10] | (buf[11] << 8) | ((uint32_t)buf[12] << 16) | ((uint32_t)buf[13] << 24)),
+             buf[14]);
     workout_ctrl_on_frame(buf, len);
     return 0;
 }
