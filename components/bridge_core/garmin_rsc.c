@@ -37,7 +37,7 @@ static uint16_t s_batt_handle   = 0;
 static uint16_t s_conn          = BLE_HS_CONN_HANDLE_NONE;
 static bool     s_subscribed    = false;
 static bool     s_batt_subscribed = false;
-static uint8_t  s_batt_pct      = 0;
+static uint8_t  s_batt_pct      = 100; /* USB-powered — report full charge */
 
 /* ---- GATT characteristic callbacks -------------------------------------- */
 
