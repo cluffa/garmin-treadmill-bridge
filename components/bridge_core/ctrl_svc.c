@@ -334,7 +334,7 @@ static int ctrl_gap_event_cb(struct ble_gap_event *event, void *arg)
     case BLE_GAP_EVENT_CONN_UPDATE:
         if (event->conn_update.status == 0) {
             struct ble_gap_conn_desc desc;
-            int rc = ble_gap_conn_find(s_conn, &desc);
+            int rc = ble_gap_conn_find(event->conn_update.conn_handle, &desc);
             if (rc == 0)
                 ESP_LOGI(TAG, "conn params updated: itvl=%dms latency=%d timeout=%dms",
                          (int)(desc.conn_itvl * 1.25f),
