@@ -3,13 +3,15 @@ import Toybox.Lang;
 import Toybox.System;
 
 // BLE client for the nRF52840 bridge's control service ("TMILL-CTRL").
-// Send-only: the field writes ctrl_dispatch command lines ("SPEED 8.0") to
-// the control characteristic; treadmill speed reaches the watch natively
-// over ANT+ (SDM footpod), so nothing is read back.
+// Send-only: the field writes a raw workout-telemetry frame to the telemetry
+// characteristic (…0004); the bridge's workout_ctrl module decides the belt
+// speed. Treadmill speed reaches the watch natively over ANT+ (SDM footpod),
+// so nothing is read back.
 class CtrlBleDelegate extends BluetoothLowEnergy.BleDelegate {
     // Contract with boards/xiao-nrf52840/platform_ble_ctrl_svc.c
     const CTRL_SVC_UUID  = BluetoothLowEnergy.stringToUuid("A6ED0001-D344-460A-8075-B9E8EC90D71B");
-    const CTRL_CHR_UUID  = BluetoothLowEnergy.stringToUuid("A6ED0002-D344-460A-8075-B9E8EC90D71B");
+    // Workout telemetry char (binary frames), decoded by bridge_core/workout_ctrl.c.
+    const CTRL_WKT_UUID  = BluetoothLowEnergy.stringToUuid("A6ED0004-D344-460A-8075-B9E8EC90D71B");
 
     hidden var mDevice as BluetoothLowEnergy.Device or Null;
     hidden var mProfileRegistered as Boolean;
@@ -30,7 +32,7 @@ class CtrlBleDelegate extends BluetoothLowEnergy.BleDelegate {
         var profile = {
             :uuid => CTRL_SVC_UUID,
             :characteristics => [{
-                :uuid => CTRL_CHR_UUID
+                :uuid => CTRL_WKT_UUID
             }]
         };
         try {
@@ -131,30 +133,21 @@ class CtrlBleDelegate extends BluetoothLowEnergy.BleDelegate {
         return mScanning;
     }
 
-    hidden function strToBytes(s as String) as ByteArray {
-        var chars = s.toUtf8Array();
-        var ba = new [chars.size()]b;
-        for (var i = 0; i < chars.size(); i++) {
-            ba[i] = chars[i];
-        }
-        return ba;
-    }
-
-    // Write "SPEED <kmh>" (uppercase — the bridge's ctrl_dispatch grammar).
-    // One write in flight at a time; drops the request if the previous write
-    // hasn't completed (the caller retries on its 5 s cadence anyway).
-    function writeSpeedKmh(kmh as Float) as Boolean {
+    // Write a raw workout-telemetry frame to the bridge. One write in flight at
+    // a time; drops the request if the previous write hasn't completed (the
+    // caller re-sends on change from compute() anyway). Returns true only when
+    // the write was actually issued, so the caller can hold off latching the
+    // frame as "sent" until it succeeds.
+    function writeWorkoutFrame(frame as ByteArray) as Boolean {
         if (mDevice == null || mWritePending) { return false; }
-        var svc = mDevice.getService(CTRL_SVC_UUID);
-        if (svc == null) { return false; }
-        var ch = svc.getCharacteristic(CTRL_CHR_UUID);
-        if (ch == null) { return false; }
-        var cmd = "SPEED " + kmh.format("%.1f");
         try {
-            ch.requestWrite(strToBytes(cmd),
+            var svc = mDevice.getService(CTRL_SVC_UUID);
+            if (svc == null) { return false; }
+            var ch = svc.getCharacteristic(CTRL_WKT_UUID);
+            if (ch == null) { return false; }
+            ch.requestWrite(frame,
                             {:writeType => BluetoothLowEnergy.WRITE_TYPE_DEFAULT});
             mWritePending = true;
-            System.println("BLE tx: " + cmd);
             return true;
         } catch (e) {
             System.println("BLE write failed: " + e.getErrorMessage());

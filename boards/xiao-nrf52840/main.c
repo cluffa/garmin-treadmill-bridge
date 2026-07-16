@@ -24,6 +24,7 @@
 #include "platform_ant_sdm.h"
 #include "platform_ble_central.h"
 #include "platform_ble_ctrl_svc.h"
+#include "workout_ctrl.h"
 
 #define HEARTBEAT_MS 1000
 
@@ -38,6 +39,10 @@ static void heartbeat_cb(void *ctx)
     bool link = platform_ble_central_connected();
     nrf_gpio_pin_write(LED_1, link ? 0 : 1);
     nrf_gpio_pin_write(LED_3, platform_ble_ctrl_svc_connected() ? 0 : 1);
+
+    /* ~1 Hz control keepalive: re-asserts the watch's target speed if a write
+     * was lost (the data field only sends on change). */
+    workout_ctrl_tick();
 
     /* Push the treadmill link state to a subscribed watch on change so the
      * picker updates without polling. */

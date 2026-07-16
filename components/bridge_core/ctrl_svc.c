@@ -19,6 +19,7 @@
 #include "ctrl_svc.h"
 #include "ctrl_dispatch.h"
 #include "ctrl_frames.h"
+#include "workout_ctrl.h"
 #include "garmin_rsc.h"
 #include "machine.h"
 
@@ -49,6 +50,10 @@ static const ble_uuid128_t CTRL_CHR_UUID = BLE_UUID128_INIT(
 static const ble_uuid128_t CTRL_RSP_UUID = BLE_UUID128_INIT(
     0x1b,0xd7,0x90,0xec,0xe8,0xb9,0x75,0x80,
     0x0a,0x46,0x44,0xd3,0x03,0x00,0xed,0xa6);
+/* …0004: workout telemetry, binary frames from the data field. */
+static const ble_uuid128_t CTRL_WKT_UUID = BLE_UUID128_INIT(
+    0x1b,0xd7,0x90,0xec,0xe8,0xb9,0x75,0x80,
+    0x0a,0x46,0x44,0xd3,0x04,0x00,0xed,0xa6);
 
 /* ---- state --------------------------------------------------------------- */
 
@@ -218,6 +223,35 @@ static int ctrl_rsp_access(uint16_t conn_handle,
     return BLE_ATT_ERR_READ_NOT_PERMITTED;
 }
 
+/* Workout telemetry: the data field writes a raw binary frame here; hand it to
+ * the shared control policy (same module the nRF bridge uses). */
+static int ctrl_wkt_access(uint16_t conn_handle,
+                           uint16_t attr_handle,
+                           struct ble_gatt_access_ctxt *ctxt,
+                           void *arg)
+{
+    (void)attr_handle; (void)arg;
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return 0;
+    if (conn_handle != s_conn) {
+        ESP_LOGW(TAG, "wkt write from conn=%d, expected=%d — rejecting", conn_handle, s_conn);
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+
+    uint8_t buf[WORKOUT_FRAME_LEN];
+    uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
+    if (len > sizeof buf) len = sizeof buf;
+    os_mbuf_copydata(ctxt->om, 0, len, buf);
+    ESP_LOGI(TAG, "wkt frame: ver=%d ts=%d fl=0x%02x int=%d tt=%d lo=%d hi=%d dur=%d dv=%u rep=%d",
+             buf[0], buf[1], buf[2], buf[3], buf[4],
+             (int)(buf[5] | (buf[6] << 8)),
+             (int)(buf[7] | (buf[8] << 8)),
+             buf[9],
+             (unsigned)(buf[10] | (buf[11] << 8) | ((uint32_t)buf[12] << 16) | ((uint32_t)buf[13] << 24)),
+             buf[14]);
+    workout_ctrl_on_frame(buf, len);
+    return 0;
+}
+
 /* ---- GATT service table ----------------------------------------------------- */
 
 static const struct ble_gatt_svc_def s_ctrl_svcs[] = {
@@ -237,6 +271,12 @@ static const struct ble_gatt_svc_def s_ctrl_svcs[] = {
                 .access_cb  = ctrl_rsp_access,
                 .val_handle = &s_rsp_handle,
                 .flags      = BLE_GATT_CHR_F_NOTIFY,
+            },
+            {
+                /* workout telemetry: raw binary frames, write / write-no-rsp */
+                .uuid      = &CTRL_WKT_UUID.u,
+                .access_cb = ctrl_wkt_access,
+                .flags     = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
             },
             { 0 },
         },
@@ -346,6 +386,7 @@ static int ctrl_gap_event_cb(struct ble_gap_event *event, void *arg)
                  event->disconnect.reason);
         s_conn = BLE_HS_CONN_HANDLE_NONE;
         s_notify_on = false;
+        workout_ctrl_reset();   /* stop re-asserting a stale target */
         start_advertising();
         break;
 
