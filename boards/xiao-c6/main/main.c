@@ -24,6 +24,12 @@ static void on_state(const treadmill_state_t *s)
     serial_ctrl_push_state(s);
 }
 
+/* 2 Hz RSC re-emit: the data field / native RSC sensor gets a steady pace
+ * refresh instead of one capped by the treadmill's slow iFit frame rate.
+ * garmin_rsc_tick() re-notifies the last state; it's a no-op until a watch
+ * subscribes and the first treadmill frame lands. */
+static void rsc_tick_cb(void *arg) { (void)arg; garmin_rsc_tick(); }
+
 static void on_link(bool connected)
 {
     (void)connected;
@@ -58,6 +64,12 @@ static void on_host_sync(void)
                                                .name = "workout_ka" };
     esp_timer_create(&wkt_args, &wkt_timer);
     esp_timer_start_periodic(wkt_timer, 1000000 /* 1 s */);
+
+    static esp_timer_handle_t rsc_timer;
+    const esp_timer_create_args_t rsc_args = { .callback = rsc_tick_cb,
+                                               .name = "rsc_reemit" };
+    esp_timer_create(&rsc_args, &rsc_timer);
+    esp_timer_start_periodic(rsc_timer, 500000 /* 500 ms = 2 Hz */);
 
     machine_try_last();
 }

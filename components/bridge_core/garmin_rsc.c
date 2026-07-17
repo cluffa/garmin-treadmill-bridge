@@ -39,6 +39,28 @@ static bool     s_subscribed    = false;
 static bool     s_batt_subscribed = false;
 static uint8_t  s_batt_pct      = 100; /* USB-powered — report full charge */
 
+/* Last state seen from the treadmill, re-emitted on a fixed cadence by
+ * garmin_rsc_tick() so the watch's pace refresh isn't capped by how often the
+ * treadmill happens to send a frame (the iFit poll cadence is slow/uneven). */
+static treadmill_state_t s_last_state;
+static bool              s_have_state = false;
+
+static void rsc_notify_last(void)
+{
+    if (!s_subscribed || s_conn == BLE_HS_CONN_HANDLE_NONE || !s_have_state)
+        return;
+
+    uint8_t buf[RSC_MEAS_BUF_LEN];
+    size_t  len = rsc_encode_measurement(&s_last_state, buf, sizeof buf);
+    if (len == 0) { ESP_LOGW(TAG, "rsc_encode_measurement returned 0"); return; }
+
+    struct os_mbuf *om = ble_hs_mbuf_from_flat(buf, (uint16_t)len);
+    if (!om) { ESP_LOGE(TAG, "OOM"); return; }
+    /* RSC frames are fine to drop on ENOMEM/EBUSY — the next one supersedes. */
+    int rc = ble_gatts_notify_custom(s_conn, s_meas_handle, om);
+    if (rc != 0) ESP_LOGD(TAG, "notify failed: %d", rc);
+}
+
 /* ---- GATT characteristic callbacks -------------------------------------- */
 
 static int rsc_meas_access(uint16_t conn_handle,
@@ -138,10 +160,9 @@ void garmin_rsc_on_gap_event(struct ble_gap_event *event)
     case BLE_GAP_EVENT_SUBSCRIBE:
         if (event->subscribe.attr_handle == s_meas_handle) {
             s_subscribed = (event->subscribe.cur_notify != 0);
-            /* Notify the connection that actually subscribed to RSC — not
-             * whichever peripheral connected first. Otherwise if the phone
-             * connects before the watch, s_conn points at the phone and the
-             * watch's speed notifications go to the wrong link. */
+            /* Notify the connection that actually subscribed to RSC, not
+             * whichever central connected first, so speed notifications always
+             * follow the link that asked for them. */
             if (s_subscribed) s_conn = event->subscribe.conn_handle;
             ESP_LOGI(TAG, "RSC Measurement %s",
                      s_subscribed ? "subscribed" : "unsubscribed");
@@ -185,16 +206,19 @@ void garmin_rsc_start(void)
 
 void garmin_rsc_update(const treadmill_state_t *s)
 {
-    if (!s_subscribed || s_conn == BLE_HS_CONN_HANDLE_NONE) return;
+    /* Cache for the periodic re-emit even if no watch is subscribed yet, so the
+     * first tick after a subscription already has real data. */
+    s_last_state = *s;
+    s_have_state = true;
+    rsc_notify_last();  /* emit immediately on change for low latency */
+}
 
-    uint8_t buf[RSC_MEAS_BUF_LEN];
-    size_t  len = rsc_encode_measurement(s, buf, sizeof buf);
-    if (len == 0) { ESP_LOGW(TAG, "rsc_encode_measurement returned 0"); return; }
-
-    struct os_mbuf *om = ble_hs_mbuf_from_flat(buf, (uint16_t)len);
-    if (!om) { ESP_LOGE(TAG, "OOM"); return; }
-    int rc = ble_gatts_notify_custom(s_conn, s_meas_handle, om);
-    if (rc != 0) ESP_LOGE(TAG, "notify failed: %d", rc);
+/* Re-emit the last treadmill state. Call at a fixed ~1-2 Hz cadence from a board
+ * timer to give the watch a steady pace refresh independent of the treadmill's
+ * frame rate. A no-op until the first real frame arrives / a watch subscribes. */
+void garmin_rsc_tick(void)
+{
+    rsc_notify_last();
 }
 
 void garmin_rsc_update_battery(uint8_t pct)

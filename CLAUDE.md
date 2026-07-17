@@ -240,6 +240,7 @@ RSC sensor on the watch or it grabs the connection.
 **RSC mode (Treadmill -> Garmin):**
 * `Treadmill (FTMS/iFit)` -> `ESP32 (BLE Central)` -> `Garmin Watch (BLE RSC Peripheral)`
 * The ESP32 parses treadmill frames into a generic `treadmill_state_t` via `bridge_core`; `garmin_rsc.c` exposes it as a standard RSC sensor any Garmin watch can pair with.
+* RSC notifications are **not purely event-driven**: `garmin_rsc_update()` emits immediately on each treadmill frame *and* caches the state, which `garmin_rsc_tick()` re-emits on a fixed ~2 Hz board timer (C6 `main.c` `esp_timer`, mirroring the workout keepalive). Without this the watch's pace refresh was capped by the slow/uneven iFit poll cadence. RSC frames are safe to drop on `ENOMEM`/`EBUSY` (the next supersedes), so the re-emit logs at `DEBUG`, not `ERROR`.
 
 **Control mode (Garmin -> Treadmill):**
 * `Garmin Watch (CIQ DataField, BLE)` -> `ESP32 ctrl_svc` -> `Treadmill (FTMS/iFit Control)`
