@@ -8,22 +8,25 @@
  * ctrl_frames.h (CIQ pins the ATT MTU at 23); every other command's JSON
  * reply goes to the console log only.
  *
- * Also owns the single advertisement (previously nus_ctrl's, now deleted): primary packet
- * carries the A6ED 128-bit service UUID (the watch apps filter on it), scan
- * response carries RSC 0x1814 + device name for native sensor pairing. The
- * watch holds at most one link, so RSC mode and control mode are naturally
- * exclusive — whichever connects first wins until it disconnects.
+ * Also owns the single advertisement (previously nus_ctrl's, now deleted):
+ * primary packet carries RSC 0x1814 + device name for native sensor pairing,
+ * scan response carries the A6ED 128-bit service UUID (CIQ scans only see
+ * scan-response UUIDs — see start_advertising). The watch holds at most one
+ * link, so RSC mode and control mode are naturally exclusive — whichever
+ * connects first wins until it disconnects.
  */
 
 #include "ctrl_svc.h"
 #include "ctrl_dispatch.h"
 #include "ctrl_frames.h"
+#include "workout_ctrl.h"
 #include "garmin_rsc.h"
 #include "machine.h"
 
 #include "host/ble_hs.h"
 #include "host/ble_gap.h"
 #include "host/ble_gatt.h"
+#include "nimble/nimble_port.h"
 #include "services/gap/ble_svc_gap.h"
 
 #include "esp_log.h"
@@ -47,6 +50,10 @@ static const ble_uuid128_t CTRL_CHR_UUID = BLE_UUID128_INIT(
 static const ble_uuid128_t CTRL_RSP_UUID = BLE_UUID128_INIT(
     0x1b,0xd7,0x90,0xec,0xe8,0xb9,0x75,0x80,
     0x0a,0x46,0x44,0xd3,0x03,0x00,0xed,0xa6);
+/* …0004: workout telemetry, binary frames from the data field. */
+static const ble_uuid128_t CTRL_WKT_UUID = BLE_UUID128_INIT(
+    0x1b,0xd7,0x90,0xec,0xe8,0xb9,0x75,0x80,
+    0x0a,0x46,0x44,0xd3,0x04,0x00,0xed,0xa6);
 
 /* ---- state --------------------------------------------------------------- */
 
@@ -58,11 +65,20 @@ static SemaphoreHandle_t s_tx_mutex;
 
 /* ---- notification TX queue -----------------------------------------------
  * The host stack buffers only a few notifications at a time; a LIST reply is
- * up to FTMS_MAX_DEVICES+1 frames, so ring-buffer them and drain on
- * BLE_GAP_EVENT_NOTIFY_TX. */
+ * up to FTMS_MAX_DEVICES+1 frames, so ring-buffer them.
+ *
+ * Unlike the nRF SoftDevice (HVN_TX_COMPLETE), NimBLE has no deferred
+ * completion event for notifications: BLE_GAP_EVENT_NOTIFY_TX fires
+ * synchronously from inside ble_gatts_notify_custom(), on this same task,
+ * while s_tx_mutex is held — so it can neither drain the queue later nor be
+ * waited on (taking the mutex there deadlocks). Instead, when a send attempt
+ * fails on transient resource exhaustion, retry from a callout on the host
+ * event queue. */
 #define TXQ_LEN 12
+#define TXQ_RETRY_MS 30
 static struct { uint8_t len; uint8_t data[CTRL_FRAME_MAX]; } s_txq[TXQ_LEN];
-static volatile uint8_t s_txq_head, s_txq_tail;
+static uint8_t s_txq_head, s_txq_tail;   /* all access under s_tx_mutex */
+static struct ble_npl_callout s_txq_retry;
 
 /* caller holds s_tx_mutex */
 static void txq_pump(void)
@@ -74,14 +90,29 @@ static void txq_pump(void)
         }
         struct os_mbuf *om = ble_hs_mbuf_from_flat(s_txq[s_txq_tail].data,
                                                    s_txq[s_txq_tail].len);
-        if (!om) return;               /* OOM — resume on NOTIFY_TX */
-        int rc = ble_gatts_notify_custom(s_conn, s_rsp_handle, om);
-        if (rc == BLE_HS_ENOMEM || rc == BLE_HS_EBUSY)
-            return;                    /* resume on NOTIFY_TX */
+        int rc;
+        if (!om)
+            rc = BLE_HS_ENOMEM;        /* mbuf pool exhausted — retry too */
+        else
+            rc = ble_gatts_notify_custom(s_conn, s_rsp_handle, om);
+        if (rc == BLE_HS_ENOMEM || rc == BLE_HS_EBUSY) {
+            ble_npl_callout_reset(&s_txq_retry,
+                                  ble_npl_time_ms_to_ticks32(TXQ_RETRY_MS));
+            return;                    /* retry with the frame still queued */
+        }
         if (rc != 0)
             ESP_LOGW(TAG, "notify rc=%d — dropping frame", rc);
         s_txq_tail = (uint8_t)((s_txq_tail + 1) % TXQ_LEN);
     }
+}
+
+/* runs on the NimBLE host task via s_txq_retry */
+static void txq_retry_cb(struct ble_npl_event *ev)
+{
+    (void)ev;
+    xSemaphoreTake(s_tx_mutex, portMAX_DELAY);
+    txq_pump();
+    xSemaphoreGive(s_tx_mutex);
 }
 
 /* caller holds s_tx_mutex */
@@ -192,6 +223,35 @@ static int ctrl_rsp_access(uint16_t conn_handle,
     return BLE_ATT_ERR_READ_NOT_PERMITTED;
 }
 
+/* Workout telemetry: the data field writes a raw binary frame here; hand it to
+ * the shared control policy (same module the nRF bridge uses). */
+static int ctrl_wkt_access(uint16_t conn_handle,
+                           uint16_t attr_handle,
+                           struct ble_gatt_access_ctxt *ctxt,
+                           void *arg)
+{
+    (void)attr_handle; (void)arg;
+    if (ctxt->op != BLE_GATT_ACCESS_OP_WRITE_CHR) return 0;
+    if (conn_handle != s_conn) {
+        ESP_LOGW(TAG, "wkt write from conn=%d, expected=%d — rejecting", conn_handle, s_conn);
+        return BLE_ATT_ERR_UNLIKELY;
+    }
+
+    uint8_t buf[WORKOUT_FRAME_LEN];
+    uint16_t len = OS_MBUF_PKTLEN(ctxt->om);
+    if (len > sizeof buf) len = sizeof buf;
+    os_mbuf_copydata(ctxt->om, 0, len, buf);
+    ESP_LOGI(TAG, "wkt frame: ver=%d ts=%d fl=0x%02x int=%d tt=%d lo=%d hi=%d dur=%d dv=%u rep=%d",
+             buf[0], buf[1], buf[2], buf[3], buf[4],
+             (int)(buf[5] | (buf[6] << 8)),
+             (int)(buf[7] | (buf[8] << 8)),
+             buf[9],
+             (unsigned)(buf[10] | (buf[11] << 8) | ((uint32_t)buf[12] << 16) | ((uint32_t)buf[13] << 24)),
+             buf[14]);
+    workout_ctrl_on_frame(buf, len);
+    return 0;
+}
+
 /* ---- GATT service table ----------------------------------------------------- */
 
 static const struct ble_gatt_svc_def s_ctrl_svcs[] = {
@@ -212,6 +272,12 @@ static const struct ble_gatt_svc_def s_ctrl_svcs[] = {
                 .val_handle = &s_rsp_handle,
                 .flags      = BLE_GATT_CHR_F_NOTIFY,
             },
+            {
+                /* workout telemetry: raw binary frames, write / write-no-rsp */
+                .uuid      = &CTRL_WKT_UUID.u,
+                .access_cb = ctrl_wkt_access,
+                .flags     = BLE_GATT_CHR_F_WRITE | BLE_GATT_CHR_F_WRITE_NO_RSP,
+            },
             { 0 },
         },
     },
@@ -224,10 +290,13 @@ static int ctrl_gap_event_cb(struct ble_gap_event *event, void *arg);
 /* ---- advertising ------------------------------------------------------------ */
 
 /*
- * Single advertisement owned by ctrl_svc. Primary packet carries the A6ED
- * 128-bit UUID (the CIQ data field / ctrl app filter on it). Scan response
- * carries the RSC 16-bit UUID (0x1814) and device name so a Garmin watch's
- * active scan finds the RSC sensor without a separate advertisement.
+ * Single advertisement owned by ctrl_svc. Primary packet carries the RSC
+ * 16-bit UUID (0x1814) and device name (25 of 31 bytes) — native watch
+ * sensor pairing parses the primary packet. Scan response carries the A6ED
+ * 128-bit UUID: Garmin CIQ's ScanResult.getServiceUuids() only surfaces
+ * UUIDs from the scan response, so the ctrl app / data field filter must
+ * find it there (issue #15). All three fields can't share one packet — the
+ * 128-bit UUID (18 B) + 0x1814 (4 B) + 16-char name (18 B) exceed 31 B.
  */
 static void start_advertising(void)
 {
@@ -238,23 +307,23 @@ static void start_advertising(void)
         .itvl_max  = BLE_GAP_ADV_ITVL_MS(200),
     };
 
-    /* Primary: flags + ctrl 128-bit UUID */
-    struct ble_hs_adv_fields fields = { 0 };
-    fields.flags                = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
-    fields.uuids128             = &CTRL_SVC_UUID;
-    fields.num_uuids128         = 1;
-    fields.uuids128_is_complete = 1;
-
-    /* Scan response: RSC 16-bit UUID + device name */
+    /* Primary: flags + RSC 16-bit UUID + device name */
     static ble_uuid16_t rsc_uuid = BLE_UUID16_INIT(0x1814);
+    struct ble_hs_adv_fields fields = { 0 };
+    fields.flags               = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
+    fields.uuids16             = &rsc_uuid;
+    fields.num_uuids16         = 1;
+    fields.uuids16_is_complete = 1;
+    const char *name           = ble_svc_gap_device_name();
+    fields.name                = (const uint8_t *)name;
+    fields.name_len            = (uint8_t)strlen(name);
+    fields.name_is_complete    = 1;
+
+    /* Scan response: ctrl 128-bit UUID (must be here for CIQ scans) */
     struct ble_hs_adv_fields rsp = { 0 };
-    rsp.uuids16             = &rsc_uuid;
-    rsp.num_uuids16         = 1;
-    rsp.uuids16_is_complete = 1;
-    const char *name        = ble_svc_gap_device_name();
-    rsp.name                = (const uint8_t *)name;
-    rsp.name_len            = (uint8_t)strlen(name);
-    rsp.name_is_complete    = 1;
+    rsp.uuids128             = &CTRL_SVC_UUID;
+    rsp.num_uuids128         = 1;
+    rsp.uuids128_is_complete = 1;
 
     if (ble_gap_adv_set_fields(&fields) != 0 ||
         ble_gap_adv_rsp_set_fields(&rsp) != 0) {
@@ -293,6 +362,23 @@ static int ctrl_gap_event_cb(struct ble_gap_event *event, void *arg)
         s_txq_head = s_txq_tail = 0;
         xSemaphoreGive(s_tx_mutex);
         ESP_LOGI(TAG, "watch connected, conn=%d", s_conn);
+
+        /* Request reasonable connection parameters for a sensor peripheral
+         * that shares the radio with a BLE central (treadmill) role.
+         * Interval 40-60ms, no latency, 4s supervision timeout. */
+        {
+            struct ble_gap_upd_params upd = {
+                .itvl_min             = BLE_GAP_CONN_ITVL_MS(40),
+                .itvl_max             = BLE_GAP_CONN_ITVL_MS(60),
+                .latency              = 0,
+                .supervision_timeout  = BLE_GAP_SUPERVISION_TIMEOUT_MS(4000),
+                .min_ce_len           = 0,
+                .max_ce_len           = 0,
+            };
+            int rc = ble_gap_update_params(s_conn, &upd);
+            if (rc != 0)
+                ESP_LOGW(TAG, "update_params request failed: %d", rc);
+        }
         break;
 
     case BLE_GAP_EVENT_DISCONNECT:
@@ -300,6 +386,7 @@ static int ctrl_gap_event_cb(struct ble_gap_event *event, void *arg)
                  event->disconnect.reason);
         s_conn = BLE_HS_CONN_HANDLE_NONE;
         s_notify_on = false;
+        workout_ctrl_reset();   /* stop re-asserting a stale target */
         start_advertising();
         break;
 
@@ -314,13 +401,24 @@ static int ctrl_gap_event_cb(struct ble_gap_event *event, void *arg)
         }
         break;
 
-    case BLE_GAP_EVENT_NOTIFY_TX:
-        if (event->notify_tx.conn_handle == s_conn) {
-            xSemaphoreTake(s_tx_mutex, portMAX_DELAY);
-            txq_pump();
-            xSemaphoreGive(s_tx_mutex);
-        }
+    case BLE_GAP_EVENT_CONN_UPDATE:
+        if (event->conn_update.status == 0) {
+            struct ble_gap_conn_desc desc;
+            int rc = ble_gap_conn_find(event->conn_update.conn_handle, &desc);
+            if (rc == 0)
+                ESP_LOGI(TAG, "conn params updated: itvl=%dms latency=%d timeout=%dms",
+                         (int)(desc.conn_itvl * 1.25f),
+                         desc.conn_latency,
+                         desc.supervision_timeout * 10);
+        } else
+            ESP_LOGW(TAG, "conn update failed, status=%d", event->conn_update.status);
         break;
+
+    /* No BLE_GAP_EVENT_NOTIFY_TX case: NimBLE raises it synchronously from
+     * inside ble_gatts_notify_custom() (i.e. under s_tx_mutex in txq_pump),
+     * so taking the mutex here would deadlock — and there is no deferred
+     * notify-complete event to drain on. Stalled frames are retried via
+     * s_txq_retry instead. */
 
     default:
         break;
@@ -338,6 +436,8 @@ void ctrl_svc_set_addr_type(uint8_t addr_type)
 void ctrl_svc_register_gatt(void)
 {
     s_tx_mutex = xSemaphoreCreateMutex();
+    ble_npl_callout_init(&s_txq_retry, nimble_port_get_dflt_eventq(),
+                         txq_retry_cb, NULL);
 
     int rc = ble_gatts_count_cfg(s_ctrl_svcs);
     if (rc != 0) { ESP_LOGE(TAG, "count_cfg failed: %d", rc); return; }

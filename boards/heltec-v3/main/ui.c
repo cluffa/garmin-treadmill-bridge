@@ -3,6 +3,7 @@
 #include "garmin_rsc.h"
 #include "serial_ctrl.h"
 #include "ctrl_svc.h"
+#include "workout_ctrl.h"
 #include "button.h"
 #include "display.h"
 #include "display_format.h"
@@ -127,10 +128,31 @@ static void render_task(void *arg) {
     }
 }
 
+/* 1 Hz control keepalive: re-asserts the watch's target speed if a write was
+ * lost (the data field only sends on change). Steady period, so workout_ctrl's
+ * tick-counted keepalive stays correct regardless of the render loop's rate. */
+static void workout_tick_cb(void *arg) { (void)arg; workout_ctrl_tick(); }
+
+/* 2 Hz RSC re-emit: gives the watch a steady pace refresh instead of one capped
+ * by the treadmill's slow/uneven iFit frame rate. garmin_rsc_tick() re-notifies
+ * the last state; no-op until a watch subscribes and the first frame lands. */
+static void rsc_tick_cb(void *arg) { (void)arg; garmin_rsc_tick(); }
+
 void ui_start(void) {
     battery_init();
     garmin_rsc_start();
     ctrl_svc_start();
+    static esp_timer_handle_t wkt_timer;
+    const esp_timer_create_args_t wkt_args = { .callback = workout_tick_cb,
+                                               .name = "workout_ka" };
+    esp_timer_create(&wkt_args, &wkt_timer);
+    esp_timer_start_periodic(wkt_timer, 1000000 /* 1 s */);
+
+    static esp_timer_handle_t rsc_timer;
+    const esp_timer_create_args_t rsc_args = { .callback = rsc_tick_cb,
+                                               .name = "rsc_reemit" };
+    esp_timer_create(&rsc_args, &rsc_timer);
+    esp_timer_start_periodic(rsc_timer, 500000 /* 500 ms = 2 Hz */);
     serial_ctrl_start();
     machine_set_link_cb(on_link);
     machine_set_data_cb(on_state);

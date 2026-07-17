@@ -94,7 +94,20 @@ Gotchas:
   ≤20-byte `'D'/'E'/'S'` frames from `ctrl_frames.h` (Garmin CIQ's MTU is
   pinned at 23 — a JSON line doesn't fit one notification); other commands'
   JSON replies go to RTT only. An `'S'` frame is also pushed when the
-  treadmill link changes.
+  treadmill link changes. This ASCII grammar is now used only by the
+  `garmin_ctrl_app/` picker; the data field uses the telemetry char below.
+- **Workout telemetry char `A6ED0004-…`** (binary write): the data field
+  packs the *raw* current workout step (target/duration/intensity, resolving
+  interval work/rest via `WorkoutStepInfo.intensity`) plus `Activity` timer
+  state into one 15-byte little-endian frame (layout in `workout_ctrl.h`) and
+  writes it **on change**. All the belt-control policy lives in the shared,
+  platform-agnostic `components/bridge_core/workout_ctrl.c`: resolve the speed
+  target, command it on change immediately, re-assert on a ~30 s keepalive
+  (`workout_ctrl_tick()`, called ~1 Hz from the board), stop the belt on
+  timer pause/stop, and keep the belt moving through interval rest steps.
+  Both boards route char-`0004` writes to `workout_ctrl_on_frame()`. The old
+  fixed-5 s `SPEED` re-send (which retriggered the iFit "3:00" countdown) is
+  gone.
 - **Treadmill choice:** the firmware scans both protocols into a device
   list and connects per `connect_policy.c` — the fds-persisted
   last-connected device the moment it's seen, else the strongest-RSSI
@@ -215,8 +228,11 @@ protocol is connecting/connected. **Do not reintroduce simultaneous connections.
 The ESP32 exposes one GATT server with both the RSC sensor (0x1814) and the
 watch control service (`A6ED0001-…`, same UUIDs/grammar as the nRF bridge —
 `ctrl_svc.c` is a NimBLE port of `platform_ble_ctrl_svc.c`). The single
-advertisement (owned by `ctrl_svc.c`) carries the A6ED 128-bit UUID in the
-primary packet and RSC 0x1814 + name in the scan response. The watch holds
+advertisement (owned by `ctrl_svc.c`) carries RSC 0x1814 + name in the
+primary packet and the A6ED 128-bit UUID in the scan response — CIQ's
+`ScanResult.getServiceUuids()` only surfaces scan-response UUIDs, so the
+A6ED UUID must live there or the watch apps never find the bridge (issue
+#15); all three fields don't fit one 31-byte packet. The watch holds
 one link to the bridge, so the two modes are mutually exclusive; whichever
 watch feature connects first wins. To use control mode, disable/unpair the
 RSC sensor on the watch or it grabs the connection.
@@ -224,11 +240,12 @@ RSC sensor on the watch or it grabs the connection.
 **RSC mode (Treadmill -> Garmin):**
 * `Treadmill (FTMS/iFit)` -> `ESP32 (BLE Central)` -> `Garmin Watch (BLE RSC Peripheral)`
 * The ESP32 parses treadmill frames into a generic `treadmill_state_t` via `bridge_core`; `garmin_rsc.c` exposes it as a standard RSC sensor any Garmin watch can pair with.
+* RSC notifications are **not purely event-driven**: `garmin_rsc_update()` emits immediately on each treadmill frame *and* caches the state, which `garmin_rsc_tick()` re-emits on a fixed ~2 Hz board timer (C6 `main.c` `esp_timer`, mirroring the workout keepalive). Without this the watch's pace refresh was capped by the slow/uneven iFit poll cadence. RSC frames are safe to drop on `ENOMEM`/`EBUSY` (the next supersedes), so the re-emit logs at `DEBUG`, not `ERROR`.
 
 **Control mode (Garmin -> Treadmill):**
 * `Garmin Watch (CIQ DataField, BLE)` -> `ESP32 ctrl_svc` -> `Treadmill (FTMS/iFit Control)`
-* The data field writes uppercase `ctrl_dispatch` lines (`SPEED <kmh>`) to char `A6ED0002-…`; `LIST`/`STATUS` answer on the notify char `A6ED0003-…` in the compact `'D'/'E'/'S'` frames from `ctrl_frames.h`; other commands' JSON replies go to the console log only. An `'S'` frame is pushed on treadmill link changes (via `machine_set_link_cb`).
-* `garmin_ctrl_app/` (picker) works against the ESP32 too — `SCAN`/`LIST`/`CONNECT <n>` run through the shared grammar. No belt-speed display in control mode by design (wrist pace covers recording).
+* The data field writes a raw 15-byte workout-telemetry frame to char `A6ED0004-…` on change; `ctrl_svc.c` routes it to the shared `workout_ctrl.c`, which decides the belt speed (see the `A6ED0004` bullet in the nRF section above). `workout_ctrl_tick()` runs at 1 Hz from a `ui.c` `esp_timer`.
+* `garmin_ctrl_app/` (picker) uses the uppercase `ctrl_dispatch` grammar on char `A6ED0002-…` — `SCAN`/`LIST`/`CONNECT <n>` etc.; `LIST`/`STATUS` answer on the notify char `A6ED0003-…` in the compact `'D'/'E'/'S'` frames from `ctrl_frames.h`; other replies go to the console log. An `'S'` frame is pushed on treadmill link changes (via `machine_set_link_cb`). No belt-speed display in control mode by design (wrist pace covers recording).
 * There is no phone app anymore; the former Flutter app + BLE NUS path was removed in favor of this direct watch link.
 
 

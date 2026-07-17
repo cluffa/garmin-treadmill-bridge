@@ -16,6 +16,12 @@ void garmin_rsc_start(void);
 
 void garmin_rsc_update(const treadmill_state_t *s);
 
+// Re-emit the last treadmill state to a subscribed watch. Call at a fixed
+// ~1-2 Hz cadence from a board timer for a steady pace refresh that isn't
+// capped by the treadmill's (slow, uneven) frame rate. No-op until the first
+// real frame arrives and a watch subscribes.
+void garmin_rsc_tick(void);
+
 // Push battery state-of-charge (0..100 %) to the standard Battery Service.
 void garmin_rsc_update_battery(uint8_t pct);
 

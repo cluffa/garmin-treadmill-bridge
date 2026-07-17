@@ -10,12 +10,17 @@ class DataFieldApp extends Application.AppBase {
 
     function initialize() {
         AppBase.initialize();
+        // Created here (not onStart) because some watches call
+        // getInitialView() before onStart(); the constructor always runs
+        // first, so the view gets a live delegate either way.
+        mBle = new CtrlBleDelegate();
     }
 
     function onStart(state as Dictionary?) as Void {
-        mBle = new CtrlBleDelegate();
-        BluetoothLowEnergy.setDelegate(mBle);
-        mBle.registerProfile();   // scan starts from onProfileRegister
+        if (mBle != null) {
+            BluetoothLowEnergy.setDelegate(mBle);
+            mBle.registerProfile();   // scan starts from onProfileRegister
+        }
     }
 
     function onStop(state as Dictionary?) as Void {

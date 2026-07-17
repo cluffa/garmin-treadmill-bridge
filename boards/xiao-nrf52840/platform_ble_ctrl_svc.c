@@ -1,6 +1,7 @@
 #include "platform_ble_ctrl_svc.h"
 #include "ctrl_dispatch.h"
 #include "ctrl_frames.h"
+#include "workout_ctrl.h"
 #include "last_device.h"
 #include "platform_ble_central.h"
 
@@ -27,8 +28,10 @@ static const ble_uuid128_t CTRL_BASE = {{
 #define CTRL_SVC_UUID   0x0001
 #define CTRL_CHR_UUID   0x0002
 #define CTRL_RSP_UUID   0x0003
+#define CTRL_WKT_UUID   0x0004   /* workout telemetry: binary frames from the data field */
 
 #define CTRL_CHR_MAX_LEN 64     /* longest ctrl_dispatch line we accept */
+#define CTRL_WKT_MAX_LEN 32     /* workout frame (WORKOUT_FRAME_LEN) + headroom */
 
 /* Low-duty connectable advertising: 285 ms interval, no timeout. Leaves air
  * time for the ANT channel and the treadmill connection. */
@@ -38,6 +41,7 @@ static uint8_t  s_uuid_type;
 static uint16_t s_svc_handle;
 static ble_gatts_char_handles_t s_chr_handles;
 static ble_gatts_char_handles_t s_rsp_handles;
+static ble_gatts_char_handles_t s_wkt_handles;
 static uint16_t s_conn_handle = BLE_CONN_HANDLE_INVALID;
 static bool     s_notify_on;
 
@@ -156,6 +160,11 @@ static void on_write(const ble_gatts_evt_write_t *w)
         if (s_notify_on) send_status_frame();   /* greet with link state */
         return;
     }
+    /* Workout telemetry char: raw binary frame → shared control policy. */
+    if (w->handle == s_wkt_handles.value_handle) {
+        workout_ctrl_on_frame(w->data, w->len);
+        return;
+    }
     if (w->handle != s_chr_handles.value_handle) return;
 
     char line[CTRL_CHR_MAX_LEN + 1];
@@ -195,6 +204,7 @@ static void ble_evt_handler(const ble_evt_t *p_evt, void *p_ctx)
         if (gap->conn_handle != s_conn_handle) break;
         s_conn_handle = BLE_CONN_HANDLE_INVALID;
         s_notify_on = false;
+        workout_ctrl_reset();   /* stop re-asserting a stale target */
         NRF_LOG_INFO("ctrl_svc: watch disconnected — readvertising");
         advertising_start();
         break;
@@ -274,6 +284,28 @@ static void service_init(void)
     };
     APP_ERROR_CHECK(sd_ble_gatts_characteristic_add(s_svc_handle, &rsp_md,
                                                     &rsp_attr, &s_rsp_handles));
+
+    /* Workout telemetry characteristic: the data field writes raw binary frames
+     * (write / write-no-response), decoded by the shared workout_ctrl module. */
+    ble_gatts_char_md_t wkt_md = {
+        .char_props = { .write = 1, .write_wo_resp = 1 },
+    };
+    ble_gatts_attr_md_t wkt_attr_md = {
+        .vloc = BLE_GATTS_VLOC_STACK,
+        .vlen = 1,
+    };
+    BLE_GAP_CONN_SEC_MODE_SET_OPEN(&wkt_attr_md.read_perm);
+    BLE_GAP_CONN_SEC_MODE_SET_OPEN(&wkt_attr_md.write_perm);
+
+    ble_uuid_t wkt_uuid = { .uuid = CTRL_WKT_UUID, .type = s_uuid_type };
+    ble_gatts_attr_t wkt_attr = {
+        .p_uuid    = &wkt_uuid,
+        .p_attr_md = &wkt_attr_md,
+        .init_len  = 0,
+        .max_len   = CTRL_WKT_MAX_LEN,
+    };
+    APP_ERROR_CHECK(sd_ble_gatts_characteristic_add(s_svc_handle, &wkt_md,
+                                                    &wkt_attr, &s_wkt_handles));
 }
 
 static void advertising_init(void)

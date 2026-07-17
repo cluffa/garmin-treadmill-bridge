@@ -9,7 +9,9 @@
 #include "machine.h"
 #include "garmin_rsc.h"
 #include "ctrl_svc.h"
+#include "workout_ctrl.h"
 #include "serial_ctrl.h"
+#include "esp_timer.h"
 
 static const char *TAG = "app";
 
@@ -22,11 +24,21 @@ static void on_state(const treadmill_state_t *s)
     serial_ctrl_push_state(s);
 }
 
+/* 2 Hz RSC re-emit: the data field / native RSC sensor gets a steady pace
+ * refresh instead of one capped by the treadmill's slow iFit frame rate.
+ * garmin_rsc_tick() re-notifies the last state; it's a no-op until a watch
+ * subscribes and the first treadmill frame lands. */
+static void rsc_tick_cb(void *arg) { (void)arg; garmin_rsc_tick(); }
+
 static void on_link(bool connected)
 {
     (void)connected;
     ctrl_svc_notify_status();   /* push 'S' frame to the watch */
 }
+
+/* 1 Hz control keepalive: re-asserts the watch's target speed if a write was
+ * lost (the data field only sends on change). */
+static void workout_tick_cb(void *arg) { (void)arg; workout_ctrl_tick(); }
 
 static void on_host_sync(void)
 {
@@ -46,6 +58,19 @@ static void on_host_sync(void)
     serial_ctrl_start();
     garmin_rsc_start();
     ctrl_svc_start();
+
+    static esp_timer_handle_t wkt_timer;
+    const esp_timer_create_args_t wkt_args = { .callback = workout_tick_cb,
+                                               .name = "workout_ka" };
+    esp_timer_create(&wkt_args, &wkt_timer);
+    esp_timer_start_periodic(wkt_timer, 1000000 /* 1 s */);
+
+    static esp_timer_handle_t rsc_timer;
+    const esp_timer_create_args_t rsc_args = { .callback = rsc_tick_cb,
+                                               .name = "rsc_reemit" };
+    esp_timer_create(&rsc_args, &rsc_timer);
+    esp_timer_start_periodic(rsc_timer, 500000 /* 500 ms = 2 Hz */);
+
     machine_try_last();
 }
 

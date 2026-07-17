@@ -1,0 +1,37 @@
+{
+  "runId": "c1899445",
+  "agent": "reviewer",
+  "task": "Do a short focused code review of this diff for the branch fix/c6-rsc-discover-and-conn-stability against main. Focus on correctness, edge cases, and potential issues.\n\nChanges in two files:\n\n1. components/bridge_core/ctrl_svc.c:\n- Moved RSC 0x1814 UUID from scan response to primary advertising packet\n- After BLE connect, requests connection params (40-60ms interval, 0 latency, 4000ms timeout) via ble_gap_update_params\n- Added BLE_GAP_EVENT_CONN_UPDATE handler to log negotiated params using ble_gap_conn_find\n\n2. components/bridge_core/garmin_rsc.c:\n- Changed s_batt_pct init from 0 to 100\n\nFull diff:\n```diff\ndiff --git a/components/bridge_core/ctrl_svc.c b/components/bridge_core/ctrl_svc.c\n--- a/components/bridge_core/ctrl_svc.c\n+++ b/components/bridge_core/ctrl_svc.c\n@@ -224,10 +224,10 @@ static int ctrl_gap_event_cb(struct ble_gap_event *event, void *arg);\n /* ---- advertising ------------------------------------------------------------ */\n \n /*\n- * Single advertisement owned by ctrl_svc. Primary packet carries the A6ED\n- * 128-bit UUID (the CIQ data field / ctrl app filter on it). Scan response\n- * carries the RSC 16-bit UUID (0x1814) and device name so a Garmin watch's\n- * active scan finds the RSC sensor without a separate advertisement.\n+ * Single advertisement owned by ctrl_svc. Primary packet carries both the\n+ * RSC 16-bit UUID (0x1814 — so Garmin watches find it as a native sensor\n+ * even without an active scan) and the A6ED 128-bit UUID (CIQ data field /\n+ * ctrl app filter on it). Scan response carries the device name only.\n  */\n static void start_advertising(void)\n {\n@@ -238,19 +238,19 @@ static void start_advertising(void)\n         .itvl_max  = BLE_GAP_ADV_ITVL_MS(200),\n     };\n \n-    /* Primary: flags + ctrl 128-bit UUID */\n+    /* Primary: flags + RSC 16-bit UUID + ctrl 128-bit UUID (25 bytes total) */\n+    static ble_uuid16_t rsc_uuid = BLE_UUID16_INIT(0x1814);\n     struct ble_hs_adv_fields fields = { 0 };\n     fields.flags                = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;\n+    fields.uuids16              = &rsc_uuid;\n+    fields.num_uuids16          = 1;\n+    fields.uuids16_is_complete  = 1;\n     fields.uuids128             = &CTRL_SVC_UUID;\n     fields.num_uuids128         = 1;\n     fields.uuids128_is_complete = 1;\n \n-    /* Scan response: RSC 16-bit UUID + device name */\n-    static ble_uuid16_t rsc_uuid = BLE_UUID16_INIT(0x1814);\n+    /* Scan response: device name only */\n     struct ble_hs_adv_fields rsp = { 0 };\n-    rsp.uuids16             = &rsc_uuid;\n-    rsp.num_uuids16         = 1;\n-    rsp.uuids16_is_complete = 1;\n     const char *name        = ble_svc_gap_device_name();\n     rsp.name                = (const uint8_t *)name;\n     rsp.name_len            = (uint8_t)strlen(name);\n@@ -293,6 +293,23 @@ static int ctrl_gap_event_cb(struct ble_gap_event *event, void *arg)\n         s_txq_head = s_txq_tail = 0;\n         xSemaphoreGive(s_tx_mutex);\n         ESP_LOGI(TAG, \"watch connected, conn=%d\", s_conn);\n+\n+        /* Request reasonable connection parameters for a sensor peripheral\n+         * that shares the radio with a BLE central (treadmill) role.\n+         * Interval 40-60ms, no latency, 4s supervision timeout. */\n+        {\n+            struct ble_gap_upd_params upd = {\n+                .itvl_min             = BLE_GAP_CONN_ITVL_MS(40),\n+                .itvl_max             = BLE_GAP_CONN_ITVL_MS(60),\n+                .latency              = 0,\n+                .supervision_timeout  = BLE_GAP_SUPERVISION_TIMEOUT_MS(4000),\n+                .min_ce_len           = 0,\n+                .max_ce_len           = 0,\n+            };\n+            int rc = ble_gap_update_params(s_conn, &upd);\n+            if (rc != 0)\n+                ESP_LOGW(TAG, \"update_params request failed: %d\", rc);\n+        }\n         break;\n \n     case BLE_GAP_EVENT_DISCONNECT:\n@@ -314,6 +331,19 @@ static int ctrl_gap_event_cb(struct ble_gap_event *event, void *arg)\n         }\n         break;\n \n+    case BLE_GAP_EVENT_CONN_UPDATE:\n+        if (event->conn_update.status == 0) {\n+            struct ble_gap_conn_desc desc;\n+            int rc = ble_gap_conn_find(s_conn, &desc);\n+            if (rc == 0)\n+                ESP_LOGI(TAG, \"conn params updated: itvl=%dms latency=%d timeout=%dms\",\n+                         (int)(desc.conn_itvl * 1.25f),\n+                         desc.conn_latency,\n+                         desc.supervision_timeout * 10);\n+        } else\n+            ESP_LOGW(TAG, \"conn update failed, status=%d\", event->conn_update.status);\n+        break;\n+\n     case BLE_GAP_EVENT_NOTIFY_TX:\n         if (event->notify_tx.conn_handle == s_conn) {\n             xSemaphoreTake(s_tx_mutex, portMAX_DELAY);\n\ndiff --git a/components/bridge_core/garmin_rsc.c b/components/bridge_core/garmin_rsc.c\n--- a/components/bridge_core/garmin_rsc.c\n+++ b/components/bridge_core/garmin_rsc.c\n@@ -37,7 +37,7 @@\n static uint16_t s_conn          = BLE_HS_CONN_HANDLE_NONE;\n static bool     s_subscribed    = false;\n static bool     s_batt_subscribed = false;\n-static uint8_t  s_batt_pct      = 0;\n+static uint8_t  s_batt_pct      = 100; /* USB-powered — report full charge */\n```",
+  "exitCode": 0,
+  "usage": {
+    "input": 32423,
+    "output": 7176,
+    "cacheRead": 289792,
+    "cacheWrite": 0,
+    "cost": 0.021397621000000002,
+    "turns": 14
+  },
+  "model": "deepseek/deepseek-v4-pro:high",
+  "attemptedModels": [
+    "deepseek/deepseek-v4-pro:high"
+  ],
+  "modelAttempts": [
+    {
+      "model": "deepseek/deepseek-v4-pro:high",
+      "success": true,
+      "exitCode": 0,
+      "usage": {
+        "input": 32423,
+        "output": 7176,
+        "cacheRead": 289792,
+        "cacheWrite": 0,
+        "cost": 0.021397621000000002,
+        "turns": 14
+      }
+    }
+  ],
+  "durationMs": 102888,
+  "toolCount": 21,
+  "transcriptPath": "/Users/alex/workspace/garmin-treadmill-bridge/.pi-subagents/artifacts/c1899445_reviewer_0_transcript.jsonl",
+  "timestamp": 1783812813581
+}
